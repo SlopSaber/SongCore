@@ -51,7 +51,6 @@
     <Reference Include="GameplayCore" />
     <Reference Include="HMLib" Publicize="true" />
     <Reference Include="HMUI" />
-    <Reference Include="Interactable" />
     <Reference Include="IPA.Loader" HintPath="$(BeatSaberDir)\Beat Saber_Data\Managed\IPA.Loader.dll" />
     <Reference Include="Main" Publicize="true" />
     <Reference Include="MediaLoader" />

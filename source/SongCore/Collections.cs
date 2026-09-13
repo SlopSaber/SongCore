@@ -68,8 +68,8 @@ namespace SongCore
             }
 
             var diffData = songData?._difficulties.FirstOrDefault(x =>
-                x._difficulty == beatmapKey.difficulty && (x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.characteristicNameLocalizationKey ||
-                                                           x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.serializedName));
+                x._difficulty == beatmapKey.difficulty && (x._beatmapCharacteristicName == beatmapKey.characteristic.NameLocalizationKey() ||
+                                                           x._beatmapCharacteristicName == beatmapKey.characteristic.SerializedName()));
 
             return diffData;
         }
