@@ -188,7 +188,7 @@ namespace SongCore.Hooks
             return string.IsNullOrWhiteSpace(difficultyLabel) ? null : difficultyLabel.Replace("<", "<\u200B").Replace(">", ">\u200B");
         }
 
-        private void SelectDefaultCharacteristic(Action<BeatmapCharacteristicSegmentedControlController, IEnumerable<BeatmapCharacteristicSO>, BeatmapCharacteristicSO, HashSet<BeatmapCharacteristicSO>> original, BeatmapCharacteristicSegmentedControlController instance, IEnumerable<BeatmapCharacteristicSO> beatmapCharacteristics, BeatmapCharacteristicSO selectedBeatmapCharacteristic, HashSet<BeatmapCharacteristicSO> notAllowedCharacteristics)
+        private void SelectDefaultCharacteristic(Action<BeatmapCharacteristicSegmentedControlController, IEnumerable<BeatmapCharacteristic>, BeatmapCharacteristic, HashSet<BeatmapCharacteristic>> original, BeatmapCharacteristicSegmentedControlController instance, IEnumerable<BeatmapCharacteristic> beatmapCharacteristics, BeatmapCharacteristic selectedBeatmapCharacteristic, HashSet<BeatmapCharacteristic> notAllowedCharacteristics)
         {
             original(instance, beatmapCharacteristics, selectedBeatmapCharacteristic, notAllowedCharacteristics);
 
@@ -205,7 +205,7 @@ namespace SongCore.Hooks
             }
         }
 
-        private void SetCosmeticCharacteristic(Action<BeatmapCharacteristicSegmentedControlController, IEnumerable<BeatmapCharacteristicSO>, BeatmapCharacteristicSO, HashSet<BeatmapCharacteristicSO>> original, BeatmapCharacteristicSegmentedControlController instance, IEnumerable<BeatmapCharacteristicSO> beatmapCharacteristics, BeatmapCharacteristicSO selectedBeatmapCharacteristic, HashSet<BeatmapCharacteristicSO> notAllowedCharacteristics)
+        private void SetCosmeticCharacteristic(Action<BeatmapCharacteristicSegmentedControlController, IEnumerable<BeatmapCharacteristic>, BeatmapCharacteristic, HashSet<BeatmapCharacteristic>> original, BeatmapCharacteristicSegmentedControlController instance, IEnumerable<BeatmapCharacteristic> beatmapCharacteristics, BeatmapCharacteristic selectedBeatmapCharacteristic, HashSet<BeatmapCharacteristic> notAllowedCharacteristics)
         {
             original(instance, beatmapCharacteristics, selectedBeatmapCharacteristic, notAllowedCharacteristics);
 
