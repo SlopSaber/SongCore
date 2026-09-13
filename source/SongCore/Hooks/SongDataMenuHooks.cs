@@ -154,7 +154,7 @@ namespace SongCore.Hooks
             }
         }
 
-        private Task SetupData(Func<LevelBar, BeatmapLevel, BeatmapDifficulty, BeatmapCharacteristicSO, Task> original, LevelBar instance, BeatmapLevel beatmapLevel, BeatmapDifficulty beatmapDifficulty, BeatmapCharacteristicSO beatmapCharacteristic)
+        private Task SetupData(Func<LevelBar, BeatmapLevel, BeatmapDifficulty, BeatmapCharacteristic, Task> original, LevelBar instance, BeatmapLevel beatmapLevel, BeatmapDifficulty beatmapDifficulty, BeatmapCharacteristic beatmapCharacteristic)
         {
             var result = original(instance, beatmapLevel, beatmapDifficulty, beatmapCharacteristic);
 
@@ -163,14 +163,14 @@ namespace SongCore.Hooks
                 return result;
             }
 
-            if (_characteristicDifficultyLabels.TryGetValue(beatmapCharacteristic.serializedName, out var difficultyLabels) && difficultyLabels.TryGetValue(beatmapDifficulty, out var difficultyLabel))
+            if (_characteristicDifficultyLabels.TryGetValue(beatmapCharacteristic.SerializedName(), out var difficultyLabels) && difficultyLabels.TryGetValue(beatmapDifficulty, out var difficultyLabel))
             {
                 instance._difficultyText.textWrappingMode = TextWrappingModes.NoWrap;
                 instance._difficultyText.overflowMode = TextOverflowModes.Ellipsis;
                 instance._difficultyText.text = GetDifficultyLabel(difficultyLabel) ?? instance._difficultyText.text;
             }
 
-            var characteristicDetails = _songData._characteristicDetails?.FirstOrDefault(d => d._beatmapCharacteristicName == beatmapCharacteristic.serializedName);
+            var characteristicDetails = _songData._characteristicDetails?.FirstOrDefault(d => d._beatmapCharacteristicName == beatmapCharacteristic.SerializedName());
             if (characteristicDetails != null)
             {
                 var sprite = GetCharacteristicIcon(characteristicDetails._characteristicIconFilePath);
