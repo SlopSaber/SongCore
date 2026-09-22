@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using BGLib.JsonExtension;
+using Newtonsoft.Json;
 using IPA.Utilities;
 using SongCore.Data;
 using UnityEngine;
@@ -83,11 +84,23 @@ namespace SongCore
 
             try
             {
-                var songData = await Task.Run(() => JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, SongData>>(DataPath));
+                var songData = await Task.Run(() =>
+                {
+                    using var reader = File.OpenText(DataPath);
+                    using var json = new JsonTextReader(reader);
+                    // Keep cache parsing independent of process-wide serializer overrides.
+                    var serializer = JsonSerializer.Create(JsonSettings.readableWithDefault);
+                    serializer.CheckAdditionalContent = true;
+                    return serializer.Deserialize<ConcurrentDictionary<string, SongData>>(json);
+                });
                 if (songData != null)
                 {
                     CustomSongsData = songData;
                     Plugin.Log.Info($"Finished loading cached song data for {CustomSongsData.Count} songs.");
+                }
+                else
+                {
+                    Plugin.Log.Info("Song metadata cache is empty; rebuilding it from installed maps.");
                 }
             }
             catch (Exception ex)

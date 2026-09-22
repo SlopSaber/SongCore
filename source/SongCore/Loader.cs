@@ -403,7 +403,8 @@ namespace SongCore
                     // Get Levels from CustomLevels and CustomWIPLevels folders
                     var songFolders = new DirectoryInfo(_customLevelsPath).EnumerateDirectories()
                         .Concat(new DirectoryInfo(_customWIPPath).EnumerateDirectories())
-                        .Where(d => d.Exists && !CustomLevelPathHelper.IsHiddenDirectory(d))
+                        .Where(d => d.Exists && !CustomLevelPathHelper.IsHiddenDirectory(d) &&
+                            !string.Equals(d.FullName, Path.Combine(_customWIPPath, "Cache"), StringComparison.OrdinalIgnoreCase))
                         .Select(d => d.FullName)
                         .ToArray();
                     var songFoldersCount = songFolders.Length;
@@ -1176,11 +1177,11 @@ namespace SongCore
                     {
                         if (loadedSaveData.standardLevelInfoSaveData != null)
                         {
-                            length = GetLengthFromOgg(Path.Combine(loadedSaveData.customLevelFolderInfo.folderPath, loadedSaveData.standardLevelInfoSaveData.songFilename));
+                            length = GetLengthFromAudio(Path.Combine(loadedSaveData.customLevelFolderInfo.folderPath, loadedSaveData.standardLevelInfoSaveData.songFilename));
                         }
                         else if (loadedSaveData.beatmapLevelSaveData != null)
                         {
-                            length = GetLengthFromOgg(Path.Combine(loadedSaveData.customLevelFolderInfo.folderPath, loadedSaveData.beatmapLevelSaveData.audio.songFilename));
+                            length = GetLengthFromAudio(Path.Combine(loadedSaveData.customLevelFolderInfo.folderPath, loadedSaveData.beatmapLevelSaveData.audio.songFilename));
                         }
                     }
                     catch (Exception)
@@ -1325,6 +1326,60 @@ namespace SongCore
             0x00,
             0x04
         };
+
+        private static float GetLengthFromAudio(string filePath)
+        {
+            if (!string.Equals(Path.GetExtension(filePath), ".wav", StringComparison.OrdinalIgnoreCase))
+            {
+                return GetLengthFromOgg(filePath);
+            }
+
+            using var stream = File.OpenRead(filePath);
+            using var reader = new BinaryReader(stream, Encoding.ASCII);
+            if (stream.Length < 12 || Encoding.ASCII.GetString(reader.ReadBytes(4)) != "RIFF")
+            {
+                return -1;
+            }
+
+            long end = Math.Min(stream.Length, 8L + reader.ReadUInt32());
+            if (Encoding.ASCII.GetString(reader.ReadBytes(4)) != "WAVE")
+            {
+                return -1;
+            }
+
+            uint byteRate = 0;
+            long dataSize = 0;
+            while (stream.Position + 8 <= end)
+            {
+                string chunk = Encoding.ASCII.GetString(reader.ReadBytes(4));
+                uint size = reader.ReadUInt32();
+                long next = stream.Position + size + (size & 1);
+                if (stream.Position + size > end)
+                {
+                    return -1;
+                }
+
+                if (chunk == "fmt " && size >= 16)
+                {
+                    ushort format = reader.ReadUInt16();
+                    reader.ReadUInt16(); // Channels.
+                    reader.ReadUInt32(); // Sample rate.
+                    uint rate = reader.ReadUInt32();
+                    if (format == 1 || format == 3)
+                    {
+                        byteRate = rate;
+                    }
+                }
+                else if (chunk == "data")
+                {
+                    dataSize += size;
+                }
+
+                stream.Position = next;
+            }
+
+            return byteRate > 0 ? (float)((double)dataSize / byteRate) : -1;
+        }
 
         public static float GetLengthFromOgg(string oggFile)
         {
