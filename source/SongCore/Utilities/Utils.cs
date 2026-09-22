@@ -11,7 +11,7 @@ namespace SongCore.Utilities
     {
         public static bool IsModInstalled(string modName)
         {
-            return IPA.Loader.PluginManager.Plugins.Any(mod => mod.Name == modName) || IPA.Loader.PluginManager.EnabledPlugins.Any(mod => mod.Id == modName);
+            return IPA.Loader.PluginManager.EnabledPlugins.Any(mod => mod.Id == modName || mod.Name == modName);
         }
 
         public static bool DiffHasColors(SongData.DifficultyData songData)

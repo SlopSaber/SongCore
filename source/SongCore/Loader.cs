@@ -78,8 +78,8 @@ namespace SongCore
         public static ConcurrentDictionary<string, BeatmapLevel> CustomWIPLevels = new ConcurrentDictionary<string, BeatmapLevel>();
         public static ConcurrentDictionary<string, BeatmapLevel> CachedWIPLevels = new ConcurrentDictionary<string, BeatmapLevel>();
         public static readonly List<SeparateSongFolder> SeparateSongFolders = new List<SeparateSongFolder>();
-        public static Sprite defaultCoverImage;
-        public static Loader Instance;
+        public static Sprite? defaultCoverImage;
+        public static Loader? Instance;
 
         public static SongCoreCustomBeatmapLevelPack? CustomLevelsPack { get; private set; }
         public static SongCoreCustomBeatmapLevelPack? WIPLevelsPack { get; private set; }
@@ -88,10 +88,30 @@ namespace SongCore
         public static bool AreSongsLoaded { get; private set; }
         public static bool AreSongsLoading { get; private set; }
         public static float LoadingProgress { get; private set; }
-        public static BeatmapLevelsModel BeatmapLevelsModelSO { get; private set; }
-        public static CustomLevelLoader CustomLevelLoader { get; private set; }
-        public static SpriteAsyncLoader cachedMediaAsyncLoaderSO { get; private set; }
-        public static BeatmapCharacteristicCollection beatmapCharacteristicCollection { get; private set; }
+        private static BeatmapLevelsModel? BeatmapLevelsModelSOValue;
+        public static BeatmapLevelsModel BeatmapLevelsModelSO
+        {
+            get => BeatmapLevelsModelSOValue ?? throw new InvalidOperationException("SongCore has not finished scene initialization.");
+            private set => BeatmapLevelsModelSOValue = value;
+        }
+        private static CustomLevelLoader? CustomLevelLoaderValue;
+        public static CustomLevelLoader CustomLevelLoader
+        {
+            get => CustomLevelLoaderValue ?? throw new InvalidOperationException("SongCore has not finished scene initialization.");
+            private set => CustomLevelLoaderValue = value;
+        }
+        private static SpriteAsyncLoader? cachedMediaAsyncLoaderSOValue;
+        public static SpriteAsyncLoader cachedMediaAsyncLoaderSO
+        {
+            get => cachedMediaAsyncLoaderSOValue ?? throw new InvalidOperationException("SongCore has not finished scene initialization.");
+            private set => cachedMediaAsyncLoaderSOValue = value;
+        }
+        private static BeatmapCharacteristicCollection? beatmapCharacteristicCollectionValue;
+        public static BeatmapCharacteristicCollection beatmapCharacteristicCollection
+        {
+            get => beatmapCharacteristicCollectionValue ?? throw new InvalidOperationException("SongCore has not finished scene initialization.");
+            private set => beatmapCharacteristicCollectionValue = value;
+        }
 
         public void Initialize()
         {
@@ -214,7 +234,7 @@ namespace SongCore
             {
                 if (!CachedWIPLevels.IsEmpty)
                 {
-                    CustomLevelsRepository.AddLevelPack(CachedWIPLevelsPack);
+                    CustomLevelsRepository.AddLevelPack(CachedWIPLevelsPack ?? throw new InvalidOperationException("CachedWIPLevelsPack was not created."));
                 }
                 else
                 {
@@ -226,10 +246,11 @@ namespace SongCore
             {
                 if (folderEntry.SongFolderEntry.Pack == FolderLevelPack.NewPack)
                 {
-                    folderEntry.LevelPack.UpdateBeatmapLevels([.. folderEntry.Levels.Values]);
+                    var levelPack = folderEntry.LevelPack ?? throw new InvalidOperationException("Separate song folder has no level pack.");
+                    levelPack.UpdateBeatmapLevels([.. folderEntry.Levels.Values]);
                     if (CustomLevelsRepository != null && (!folderEntry.Levels.IsEmpty || folderEntry is ModSeparateSongFolder { AlwaysShow: true }))
                     {
-                        CustomLevelsRepository.AddLevelPack(folderEntry.LevelPack);
+                        CustomLevelsRepository.AddLevelPack(levelPack);
                     }
                 }
             }
@@ -662,9 +683,9 @@ namespace SongCore
                         });
 
                         CustomLevelsRepository.ClearLevelPacks();
-                        CustomLevelsRepository.AddLevelPack(CustomLevelsPack);
-                        CustomLevelsRepository.AddLevelPack(WIPLevelsPack);
-                        CustomLevelsRepository.AddLevelPack(CachedWIPLevelsPack);
+                        CustomLevelsRepository.AddLevelPack(CustomLevelsPack ?? throw new InvalidOperationException("CustomLevelsPack was not created."));
+                        CustomLevelsRepository.AddLevelPack(WIPLevelsPack ?? throw new InvalidOperationException("WIPLevelsPack was not created."));
+                        CustomLevelsRepository.AddLevelPack(CachedWIPLevelsPack ?? throw new InvalidOperationException("CachedWIPLevelsPack was not created."));
                     }
 
                     #endregion
@@ -1036,7 +1057,7 @@ namespace SongCore
 
         public static (string hash, BeatmapLevel beatmapLevel)? LoadCustomLevel(string customLevelPath, SongFolderEntry? entry = null)
         {
-            return Instance.LoadCustomLevelInternal(customLevelPath, entry);
+            return (Instance ?? throw new InvalidOperationException("SongCore has not been initialized.")).LoadCustomLevelInternal(customLevelPath, entry);
         }
 
         private (string hash, BeatmapLevel beatmapLevel)? LoadCustomLevelInternal(string customLevelPath, SongFolderEntry? entry = null)

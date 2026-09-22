@@ -35,7 +35,7 @@ namespace SongCore.Installers
             {
                 if (Loader.AreSongsLoaded)
                 {
-                    Loader.Instance.RefreshSongs();
+                    Loader.Instance?.RefreshSongs();
                 }
             }
         }

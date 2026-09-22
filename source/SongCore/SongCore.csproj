@@ -1,6 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <Import Project="SongCore.csproj.user" Condition="Exists('SongCore.csproj.user')" />
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>

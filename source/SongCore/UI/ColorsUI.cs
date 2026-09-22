@@ -24,17 +24,32 @@ namespace SongCore.UI
             _bsmlParser = bsmlParser;
         }
 
-        private ColorSchemeView colorSchemeView;
+        private ColorSchemeView? colorSchemeViewValue;
+        private ColorSchemeView colorSchemeView
+        {
+            get => colorSchemeViewValue ?? throw new System.InvalidOperationException("colorSchemeView has not been initialized.");
+            set => colorSchemeViewValue = value;
+        }
 
         private readonly Color voidColor = new Color(0.5f, 0.5f, 0.5f, 0.25f);
 
+        private ModalView? modalValue;
         [UIComponent("modal")]
-        private readonly ModalView modal;
+        private ModalView modal
+        {
+            get => modalValue ?? throw new System.InvalidOperationException("modal has not been initialized.");
+            set => modalValue = value;
+        }
 
         private Vector3 modalPosition;
 
+        private RectTransform? selectedColorTransformValue;
         [UIComponent("selected-color")]
-        private readonly RectTransform selectedColorTransform;
+        private RectTransform selectedColorTransform
+        {
+            get => selectedColorTransformValue ?? throw new System.InvalidOperationException("selectedColorTransform has not been initialized.");
+            set => selectedColorTransformValue = value;
+        }
 
         [UIValue("noteColors")]
         public bool NoteColors
@@ -66,7 +81,7 @@ namespace SongCore.UI
 
         private void Parse()
         {
-            if (!modal)
+            if (!modalValue)
             {
                 _bsmlParser.Parse(BeatSaberMarkupLanguage.Utilities.GetResourceContent(Assembly.GetExecutingAssembly(), "SongCore.UI.colors.bsml"),
                     _standardLevelDetailViewController._standardLevelDetailView.gameObject, this);

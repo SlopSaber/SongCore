@@ -36,10 +36,20 @@ namespace SongCore.UI
             instance = this;
         }
 
-        public static RequirementsUI instance { get; set; }
+        private static RequirementsUI? instanceValue;
+        public static RequirementsUI instance
+        {
+            get => instanceValue ?? throw new System.InvalidOperationException("Requirements UI has not been initialized.");
+            set => instanceValue = value;
+        }
 
         private const string BUTTON_BSML = "<bg id='root'><action-button id='info-button' text='?' active='~button-glow' interactable='~button-interactable' anchor-pos-x='31' anchor-pos-y='0' pref-width='12' pref-height='9' on-click='button-click'/></bg>";
-        private ImageView buttonBG;
+        private ImageView? buttonBGValue;
+        private ImageView buttonBG
+        {
+            get => buttonBGValue ?? throw new System.InvalidOperationException("buttonBG has not been initialized.");
+            set => buttonBGValue = value;
+        }
         private Color originalColor0;
         private Color originalColor1;
 
@@ -62,7 +72,9 @@ namespace SongCore.UI
         public bool wipFolder;
 
         [UIComponent("list")]
-        public CustomListTableData customListTableData;
+        public CustomListTableData? customListTableData;
+
+        private CustomListTableData ListData => customListTableData ?? throw new System.InvalidOperationException("Requirements list has not been parsed.");
 
         private bool _buttonGlow = false;
 
@@ -90,13 +102,23 @@ namespace SongCore.UI
             }
         }
 
+        private ModalView? modalValue;
         [UIComponent("modal")]
-        private ModalView modal;
+        private ModalView modal
+        {
+            get => modalValue ?? throw new System.InvalidOperationException("modal has not been initialized.");
+            set => modalValue = value;
+        }
 
         private Vector3 modalPosition;
 
+        private Transform? infoButtonTransformValue;
         [UIComponent("info-button")]
-        private Transform infoButtonTransform;
+        private Transform infoButtonTransform
+        {
+            get => infoButtonTransformValue ?? throw new System.InvalidOperationException("infoButtonTransform has not been initialized.");
+            set => infoButtonTransformValue = value;
+        }
 
         [UIComponent("root")]
         protected readonly RectTransform _root = null!;
@@ -169,14 +191,17 @@ namespace SongCore.UI
         [UIAction("button-click")]
         internal void ShowRequirements()
         {
-            if (modal == null)
+            if (songData == null || beatmapLevel == null || beatmapKey is not { } selectedKey)
+                return;
+
+            if (modalValue == null)
             {
                 _bsmlParser.Parse(BeatSaberMarkupLanguage.Utilities.GetResourceContent(Assembly.GetExecutingAssembly(), "SongCore.UI.requirements.bsml"), _root.gameObject, this);
                 modalPosition = modal!.transform.localPosition;
             }
             modal.transform.localPosition = modalPosition;
             modal.Show(true);
-            customListTableData.Data.Clear();
+            ListData.Data.Clear();
 
             //Requirements
             if (diffData != null)
@@ -185,7 +210,7 @@ namespace SongCore.UI
                 {
                     foreach (var req in diffData.additionalDifficultyData._requirements)
                     {
-                        customListTableData.Data.Add(!Collections.capabilities.Contains(req)
+                        ListData.Data.Add(!Collections.capabilities.Contains(req)
                             ? new CustomCellInfo($"<size=75%>{req}", "Missing Requirement", MissingReqIcon)
                             : new CustomCellInfo($"<size=75%>{req}", "Requirement", HaveReqIcon));
                     }
@@ -202,16 +227,16 @@ namespace SongCore.UI
                         if (!string.IsNullOrWhiteSpace(author._iconPath))
                         {
                             author.icon = Utils.LoadSpriteFromFile(Path.Combine(_customLevelLoader._loadedBeatmapSaveData[beatmapLevel.levelID].customLevelFolderInfo.folderPath, author._iconPath));
-                            customListTableData.Data.Add(new CustomCellInfo(author._name, author._role, author.icon != null ? author.icon : InfoIcon));
+                            ListData.Data.Add(new CustomCellInfo(author._name, author._role, author.icon != null ? author.icon : InfoIcon));
                         }
                         else
                         {
-                            customListTableData.Data.Add(new CustomCellInfo(author._name, author._role, InfoIcon));
+                            ListData.Data.Add(new CustomCellInfo(author._name, author._role, InfoIcon));
                         }
                     }
                     else
                     {
-                        customListTableData.Data.Add(new CustomCellInfo(author._name, author._role, author.icon));
+                        ListData.Data.Add(new CustomCellInfo(author._name, author._role, author.icon));
                     }
                 }
             }
@@ -219,7 +244,7 @@ namespace SongCore.UI
             //WIP Check
             if (wipFolder)
             {
-                customListTableData.Data.Add(new CustomCellInfo("<size=70%>WIP Song. Please Play in Practice Mode", "Warning", WarningIcon));
+                ListData.Data.Add(new CustomCellInfo("<size=70%>WIP Song. Please Play in Practice Mode", "Warning", WarningIcon));
             }
 
             //Additional Diff Info
@@ -227,7 +252,7 @@ namespace SongCore.UI
             {
                 if (Utils.DiffHasColors(diffData))
                 {
-                    customListTableData.Data.Add(new CustomCellInfo($"<size=75%>Custom Colors Available", $"Click here to preview & enable or disable it.", ColorsIcon));
+                    ListData.Data.Add(new CustomCellInfo($"<size=75%>Custom Colors Available", $"Click here to preview & enable or disable it.", ColorsIcon));
                 }
                 string? environmentName = null;
 
@@ -236,7 +261,7 @@ namespace SongCore.UI
                     var environmentInfoName = songData._environmentNames.ElementAtOrDefault(diffData._environmentNameIdx.Value);
                     if (environmentInfoName != null)
                     {
-                        if (environmentInfoName != beatmapLevel.GetEnvironmentName(beatmapKey.Value.characteristic, beatmapKey.Value.difficulty))
+                        if (environmentInfoName != beatmapLevel.GetEnvironmentName(selectedKey.characteristic, selectedKey.difficulty))
                         {
                             environmentName = _environmentsListModel.GetEnvironmentInfoBySerializedNameSafe(environmentInfoName).environmentName;
                         }
@@ -247,7 +272,7 @@ namespace SongCore.UI
                 {
                     foreach (var req in diffData.additionalDifficultyData._warnings)
                     {
-                        customListTableData.Data.Add(new CustomCellInfo($"<size=75%>{req}", "Warning", WarningIcon));
+                        ListData.Data.Add(new CustomCellInfo($"<size=75%>{req}", "Warning", WarningIcon));
                     }
                 }
 
@@ -255,7 +280,7 @@ namespace SongCore.UI
                 {
                     foreach (var req in diffData.additionalDifficultyData._information)
                     {
-                        customListTableData.Data.Add(new CustomCellInfo($"<size=75%>{req}", "Info", InfoIcon));
+                        ListData.Data.Add(new CustomCellInfo($"<size=75%>{req}", "Info", InfoIcon));
                     }
                 }
 
@@ -263,7 +288,7 @@ namespace SongCore.UI
                 {
                     foreach (var req in diffData.additionalDifficultyData._suggestions)
                     {
-                        customListTableData.Data.Add(!Collections.capabilities.Contains(req)
+                        ListData.Data.Add(!Collections.capabilities.Contains(req)
                             ? new CustomCellInfo($"<size=75%>{req}", "Missing Suggestion", MissingSuggestionIcon)
                             : new CustomCellInfo($"<size=75%>{req}", "Suggestion", HaveSuggestionIcon));
                     }
@@ -274,29 +299,29 @@ namespace SongCore.UI
                     var enabledText = _config.DisableOneSaberOverride ? "[<color=#ff5072>Disabled</color>]" : "[<color=#89ff89>Enabled</color>]";
                     var enabledSubtext = _config.DisableOneSaberOverride ? "enable" : "disable";
                     var saberCountText = diffData._oneSaber.Value ? "Forced One Saber" : "Forced Standard";
-                    customListTableData.Data.Add(new CustomCellInfo($"<size=75%>{saberCountText} {enabledText}", $"Map changes saber count, click here to {enabledSubtext}.", diffData._oneSaber.Value ? OneSaberIcon : StandardIcon));
+                    ListData.Data.Add(new CustomCellInfo($"<size=75%>{saberCountText} {enabledText}", $"Map changes saber count, click here to {enabledSubtext}.", diffData._oneSaber.Value ? OneSaberIcon : StandardIcon));
                 }
 
-                if (customListTableData.Data.Count > 0)
+                if (ListData.Data.Count > 0)
                 {
                     if (environmentName == null && beatmapLevel != null)
-                        environmentName = beatmapLevel.GetEnvironmentName(beatmapKey.Value.characteristic, beatmapKey.Value.difficulty);
-                    customListTableData.Data.Add(new CustomCellInfo("<size=75%>Environment Info", $"This Map uses the Environment: {environmentName}", EnvironmentIcon));
+                        environmentName = beatmapLevel.GetEnvironmentName(selectedKey.characteristic, selectedKey.difficulty);
+                    ListData.Data.Add(new CustomCellInfo("<size=75%>Environment Info", $"This Map uses the Environment: {environmentName}", EnvironmentIcon));
 
                 }
             }
 
-            customListTableData.TableView.ReloadData();
-            customListTableData.TableView.ScrollToCellWithIdx(0, TableView.ScrollPositionType.Beginning, false);
+            ListData.TableView.ReloadData();
+            ListData.TableView.ScrollToCellWithIdx(0, TableView.ScrollPositionType.Beginning, false);
         }
 
         [UIAction("list-select")]
         private void Select(TableView _, int index)
         {
-            customListTableData.TableView.ClearSelection();
+            ListData.TableView.ClearSelection();
             if (diffData != null)
             {
-                var iconSelected = customListTableData.Data[index].Icon;
+                var iconSelected = ListData.Data[index].Icon;
                 if (iconSelected == ColorsIcon)
                 {
                     modal.Hide(false, () => _colorsUI.ShowColors(diffData));
