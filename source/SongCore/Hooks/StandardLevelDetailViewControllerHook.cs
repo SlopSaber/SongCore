@@ -39,7 +39,8 @@ namespace SongCore.Hooks
 
         private void ShowError()
         {
-            _standardLevelDetailViewController.ShowContent(StandardLevelDetailViewController.ContentType.Error, Localization.Get(StandardLevelDetailViewController.kLoadingDataErrorLocalizationKey));
+            // 1.45.1 still uses this localization key but no longer exposes the constant.
+            _standardLevelDetailViewController.ShowContent(StandardLevelDetailViewController.ContentType.Error, Localization.Get("ERROR_LOADING_DATA"));
         }
     }
 }
