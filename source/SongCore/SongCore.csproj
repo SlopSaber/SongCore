@@ -2,12 +2,16 @@
 
 
   <PropertyGroup>
+    <ImportBSMTTargets>true</ImportBSMTTargets>
+    <GameDirectory Condition="'$(GameDirectory)' == ''">D:\BSManager\BSInstances\1.45.1</GameDirectory>
+    <CopyPDB>false</CopyPDB>
+    <DisableCopyToGame>false</DisableCopyToGame>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <EnableFrameworkPathOverride>true</EnableFrameworkPathOverride>
-    <FrameworkPathOverride>$(BeatSaberDir)\Beat Saber_Data\Managed</FrameworkPathOverride>
+    <FrameworkPathOverride>$(GameDirectory)\Beat Saber_Data\Managed</FrameworkPathOverride>
 <!--    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>-->
 <!--    <NoStdLib>true</NoStdLib>-->
 <!--    <MarkPackageReferencesAsExternallyResolved>false</MarkPackageReferencesAsExternallyResolved>-->
@@ -44,23 +48,23 @@
     <Reference Include="BGLib.JsonExtension" />
     <Reference Include="BGLib.Polyglot" />
     <Reference Include="BGLib.UnityExtension" />
-    <Reference Include="BSML" HintPath="$(BeatSaberDir)\Plugins\BSML.dll" />
+    <Reference Include="BSML" HintPath="$(GameDirectory)\Plugins\BSML.dll" />
     <Reference Include="Colors" />
     <Reference Include="DataModels" Publicize="true" />
     <Reference Include="GameplayCore" />
     <Reference Include="HMLib" Publicize="true" />
     <Reference Include="HMUI" />
-    <Reference Include="IPA.Loader" HintPath="$(BeatSaberDir)\Beat Saber_Data\Managed\IPA.Loader.dll" />
+    <Reference Include="IPA.Loader" HintPath="$(GameDirectory)\Beat Saber_Data\Managed\IPA.Loader.dll" />
     <Reference Include="Main" Publicize="true" />
     <Reference Include="MediaLoader" />
     <Reference Include="Menu.ColorSettings" />
-    <Reference Include="Mono.Cecil" HintPath="$(BeatSaberDir)\Libs\Mono.Cecil.dll" />
-    <Reference Include="MonoMod.RuntimeDetour" HintPath="$(BeatSaberDir)\Libs\MonoMod.RuntimeDetour.dll" />
-    <Reference Include="MonoMod.Utils" HintPath="$(BeatSaberDir)\Libs\MonoMod.Utils.dll" />
+    <Reference Include="Mono.Cecil" HintPath="$(GameDirectory)\Libs\Mono.Cecil.dll" />
+    <Reference Include="MonoMod.RuntimeDetour" HintPath="$(GameDirectory)\Libs\MonoMod.RuntimeDetour.dll" />
+    <Reference Include="MonoMod.Utils" HintPath="$(GameDirectory)\Libs\MonoMod.Utils.dll" />
     <Reference Include="netstandard" />
     <Reference Include="Newtonsoft.Json" />
     <Reference Include="SegmentedControl" Publicize="true" />
-    <Reference Include="SiraUtil" HintPath="$(BeatSaberDir)\Plugins\SiraUtil.dll" />
+    <Reference Include="SiraUtil" HintPath="$(GameDirectory)\Plugins\SiraUtil.dll" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="Tweening" />
     <Reference Include="Unity.TextMeshPro" Publicize="true" />
