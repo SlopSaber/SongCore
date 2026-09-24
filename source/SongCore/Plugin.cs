@@ -36,6 +36,7 @@ namespace SongCore
         [OnStart]
         public void OnApplicationStart()
         {
+            Utilities.MenuStackResolver.Start();
             BasicUI.GetIcons();
 
             _ = Collections.LoadCachedSongDataAsync();
