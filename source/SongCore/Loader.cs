@@ -226,6 +226,7 @@ namespace SongCore
         /// </summary>
         public async void RefreshLevelPacks()
         {
+            var refreshTiming = Stopwatch.StartNew();
             CustomLevelsPack?.UpdateBeatmapLevels([.. CustomLevels.Values]);
             WIPLevelsPack?.UpdateBeatmapLevels([.. CustomWIPLevels.Values]);
             CachedWIPLevelsPack?.UpdateBeatmapLevels([.. CachedWIPLevels.Values]);
@@ -262,11 +263,15 @@ namespace SongCore
 
             LoadedBeatmapSaveData.Clear();
 
+            var backgroundMs = refreshTiming.ElapsedMilliseconds;
             await UnityGame.SwitchToMainThreadAsync();
+            var mainThreadWaitMs = refreshTiming.ElapsedMilliseconds - backgroundMs;
+            var mainThreadTiming = Stopwatch.StartNew();
 
             _beatmapLevelsModel.ClearLoadedBeatmapLevelsCaches();
             _beatmapLevelsModel._customLevelsRepository = CustomLevelsRepository;
             _beatmapLevelsModel.LoadAllBeatmapLevelPacks();
+            var modelMs = mainThreadTiming.ElapsedMilliseconds;
 
             if (!_loadingTaskCancellationTokenSource.IsCancellationRequested && _levelFilteringNavigationController.isActiveAndEnabled)
             {
@@ -274,6 +279,7 @@ namespace SongCore
             }
 
             OnLevelPacksRefreshed?.Invoke();
+            Plugin.Log.Info($"Menu load trace: RefreshLevelPacks background={backgroundMs}ms mainThreadWait={mainThreadWaitMs}ms model={modelMs}ms mainThreadTotal={mainThreadTiming.ElapsedMilliseconds}ms");
         }
 
         public void RefreshSongs(bool fullRefresh = true)
@@ -675,12 +681,16 @@ namespace SongCore
                         // Add level packs to the custom levels pack collection
 
                         // This creates unity sprites, so it needs to be on the main thread
+                        var packQueueTiming = Stopwatch.StartNew();
                         await UnityMainThreadTaskScheduler.Factory.StartNew(() =>
                         {
+                            var queueMs = packQueueTiming.ElapsedMilliseconds;
+                            var packTiming = Stopwatch.StartNew();
                             CustomLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + CustomLevelPathHelper.kCustomLevelsDirectoryName, "Custom Levels", defaultCoverImage, CustomLevels.Values.ToArray());
                             WIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CustomWIPLevels", "WIP Levels", UI.BasicUI.WIPIcon, CustomWIPLevels.Values.ToArray());
                             CachedWIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CachedWIPLevels", "Cached WIP Levels", UI.BasicUI.WIPIcon,
                                 CachedWIPLevels.Values.ToArray());
+                            Plugin.Log.Info($"Menu load trace: CreateLevelPacks mainThreadWait={queueMs}ms mainThread={packTiming.ElapsedMilliseconds}ms");
                         });
 
                         CustomLevelsRepository.ClearLevelPacks();
@@ -706,7 +716,38 @@ namespace SongCore
                 LoadingProgress = 1;
 
                 _loadingTask = null;
-                await UnityMainThreadTaskScheduler.Factory.StartNew(() => SongsLoadedEvent?.Invoke(this, CustomLevels));
+                var eventQueueTiming = Stopwatch.StartNew();
+                await UnityMainThreadTaskScheduler.Factory.StartNew(() =>
+                {
+                    var queueMs = eventQueueTiming.ElapsedMilliseconds;
+                    var callbacksTiming = Stopwatch.StartNew();
+                    var handlers = SongsLoadedEvent?.GetInvocationList();
+                    try
+                    {
+                        if (handlers != null)
+                        {
+                            foreach (Action<Loader, ConcurrentDictionary<string, BeatmapLevel>> handler in handlers)
+                            {
+                                var handlerTiming = Stopwatch.StartNew();
+                                try
+                                {
+                                    handler(this, CustomLevels);
+                                }
+                                finally
+                                {
+                                    if (handlerTiming.ElapsedMilliseconds >= 10)
+                                    {
+                                        Plugin.Log.Info($"Menu load trace: SongsLoaded {handler.Method.DeclaringType?.FullName}.{handler.Method.Name}={handlerTiming.ElapsedMilliseconds}ms");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        Plugin.Log.Info($"Menu load trace: SongsLoaded mainThreadWait={queueMs}ms callbacks={callbacksTiming.ElapsedMilliseconds}ms count={handlers?.Length ?? 0}");
+                    }
+                });
 
                 await Task.WhenAll(Hashing.SaveCachedSongHashesAsync(foundSongPaths.Keys), Hashing.SaveCachedAudioDataAsync(foundSongPaths.Keys), Collections.SaveCachedSongDataAsync());
             };
