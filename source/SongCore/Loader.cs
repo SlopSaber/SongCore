@@ -115,7 +115,6 @@ namespace SongCore
 
         public void Initialize()
         {
-            MenuThreadSampler.CaptureMainThread();
             _gameScenesManager.transitionDidFinishEvent += HandleSceneTransitionDidFinish;
             // BSML might fail to find the resource if done in a patched method.
             _bsmlSettings.AddSettingsMenu(nameof(SongCore), "SongCore.UI.settings.bsml", _settingsController);
@@ -702,10 +701,6 @@ namespace SongCore
 
                     #endregion
 
-                    if (!AreSongsLoaded)
-                    {
-                        MenuThreadSampler.Start();
-                    }
                     RefreshLevelPacks();
                 }
                 catch (Exception ex)
