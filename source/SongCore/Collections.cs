@@ -72,12 +72,6 @@ namespace SongCore
                 x._difficulty == beatmapKey.difficulty && (x._beatmapCharacteristicName == beatmapKey.characteristic.NameLocalizationKey() ||
                                                            x._beatmapCharacteristicName == beatmapKey.characteristic.SerializedName()));
 
-            if (diffData == null && beatmapKey.characteristic == BeatmapCharacteristic.Standard)
-            {
-                diffData = songData?._difficulties.FirstOrDefault(x =>
-                    x._difficulty == beatmapKey.difficulty && x._beatmapCharacteristicName == "Lawless");
-            }
-
             return diffData;
         }
 
