@@ -91,7 +91,17 @@ namespace SongCore.Utilities
             }
 
             var tex2D = new Texture2D(2, 2);
-            return tex2D.LoadImage(file) ? tex2D : null;
+            bool loaded = false;
+            try
+            {
+                loaded = tex2D.LoadImage(file);
+                return loaded ? tex2D : null;
+            }
+            finally
+            {
+                if (!loaded)
+                    UnityEngine.Object.Destroy(tex2D);
+            }
         }
 
         public static void PrintHierarchy(Transform transform, string spacing = "|-> ")

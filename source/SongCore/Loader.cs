@@ -361,7 +361,7 @@ namespace SongCore
                             CacheZIPs(cachePath, _customWIPPath);
 
                             var cacheFolders = Directory.EnumerateDirectories(cachePath);
-                            await LoadCachedZIPs(cacheFolders, fullRefresh, CachedWIPLevels);
+                            LoadCachedZIPs(cacheFolders, fullRefresh, CachedWIPLevels);
                         }
                         catch (Exception ex)
                         {
@@ -647,21 +647,19 @@ namespace SongCore
 
                     foreach (var folderEntry in SeparateSongFolders)
                     {
-                        switch (folderEntry.SongFolderEntry.Pack)
+                        ConcurrentDictionary<string, BeatmapLevel>? target = folderEntry.SongFolderEntry.Pack switch
                         {
-                            case FolderLevelPack.CustomLevels:
-                                CustomLevels = new ConcurrentDictionary<string, BeatmapLevel>(CustomLevels.Concat(folderEntry.Levels.Where(x => !CustomLevels.ContainsKey(x.Key)))
-                                    .ToDictionary(x => x.Key, x => x.Value));
-                                break;
-                            case FolderLevelPack.CustomWIPLevels:
-                                CustomWIPLevels = new ConcurrentDictionary<string, BeatmapLevel>(CustomWIPLevels
-                                    .Concat(folderEntry.Levels.Where(x => !CustomWIPLevels.ContainsKey(x.Key))).ToDictionary(x => x.Key, x => x.Value));
-                                break;
-                            case FolderLevelPack.CachedWIPLevels:
-                                CachedWIPLevels = new ConcurrentDictionary<string, BeatmapLevel>(CachedWIPLevels
-                                    .Concat(folderEntry.Levels.Where(x => !CachedWIPLevels.ContainsKey(x.Key))).ToDictionary(x => x.Key, x => x.Value));
-                                break;
-                        }
+                            FolderLevelPack.CustomLevels => CustomLevels,
+                            FolderLevelPack.CustomWIPLevels => CustomWIPLevels,
+                            FolderLevelPack.CachedWIPLevels => CachedWIPLevels,
+                            _ => null
+                        };
+
+                        if (target == null)
+                            continue;
+
+                        foreach (var (path, level) in folderEntry.Levels)
+                            target.TryAdd(path, level);
                     }
 
                     #endregion
@@ -708,7 +706,8 @@ namespace SongCore
                 _loadingTask = null;
                 await UnityMainThreadTaskScheduler.Factory.StartNew(() => SongsLoadedEvent?.Invoke(this, CustomLevels));
 
-                await Task.WhenAll(Hashing.SaveCachedSongHashesAsync(foundSongPaths.Keys), Hashing.SaveCachedAudioDataAsync(foundSongPaths.Keys), Collections.SaveCachedSongDataAsync());
+                var currentSongPaths = foundSongPaths.Keys.ToHashSet();
+                await Task.WhenAll(Hashing.SaveCachedSongHashesAsync(currentSongPaths), Hashing.SaveCachedAudioDataAsync(currentSongPaths), Collections.SaveCachedSongDataAsync());
             };
 
             try
@@ -961,10 +960,14 @@ namespace SongCore
         /// <param name="fullRefresh"></param>
         /// <param name="beatmapDictionary"></param>
         /// <param name="folderEntry"></param>
-        private Task LoadCachedZIPs(IEnumerable<string> cacheFolders, bool fullRefresh, ConcurrentDictionary<string, BeatmapLevel> beatmapDictionary, SongFolderEntry? folderEntry = null)
+        private void LoadCachedZIPs(IEnumerable<string> cacheFolders, bool fullRefresh, ConcurrentDictionary<string, BeatmapLevel> beatmapDictionary, SongFolderEntry? folderEntry = null)
         {
-            var tasks = new List<Task>();
-            foreach (var cachedFolder in cacheFolders)
+            var options = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2 - 1),
+                CancellationToken = _loadingTaskCancellationTokenSource.Token
+            };
+            Parallel.ForEach(cacheFolders, options, cachedFolder =>
             {
                 string[] results;
                 try
@@ -974,13 +977,13 @@ namespace SongCore
                 catch (DirectoryNotFoundException)
                 {
                     Plugin.Log.Warn($"Skipping missing or corrupt folder: '{cachedFolder}'");
-                    continue;
+                    return;
                 }
 
                 if (results.Length == 0)
                 {
                     Plugin.Log.Warn($"Folder: '{cachedFolder}' is missing {CustomLevelPathHelper.kStandardLevelInfoFilename} files!");
-                    continue;
+                    return;
                 }
 
                 foreach (var result in results)
@@ -996,26 +999,23 @@ namespace SongCore
                             }
                         }
 
-                        tasks.Add(Task.Run(() =>
+                        try
                         {
-                            try
+                            var customLevel = LoadCustomLevel(songPath, folderEntry);
+                            if (!customLevel.HasValue)
                             {
-                                var customLevel = LoadCustomLevel(songPath, folderEntry);
-                                if (!customLevel.HasValue)
-                                {
-                                    Plugin.Log.Error($"Failed to load custom level: {folderEntry}");
-                                    return;
-                                }
+                                Plugin.Log.Error($"Failed to load custom level: {folderEntry}");
+                                continue;
+                            }
 
-                                var (_, level) = customLevel.Value;
-                                beatmapDictionary[songPath] = level;
-                            }
-                            catch (Exception ex)
-                            {
-                                Plugin.Log.Error($"Failed to load song from {cachedFolder}:");
-                                Plugin.Log.Error(ex);
-                            }
-                        }, _loadingTaskCancellationTokenSource.Token));
+                            var (_, level) = customLevel.Value;
+                            beatmapDictionary[songPath] = level;
+                        }
+                        catch (Exception ex)
+                        {
+                            Plugin.Log.Error($"Failed to load song from {cachedFolder}:");
+                            Plugin.Log.Error(ex);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -1023,9 +1023,7 @@ namespace SongCore
                         Plugin.Log.Error(ex);
                     }
                 }
-            }
-
-            return Task.WhenAll(tasks);
+            });
         }
 
         #endregion
