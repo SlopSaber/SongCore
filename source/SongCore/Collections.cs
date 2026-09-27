@@ -60,6 +60,11 @@ namespace SongCore
 
         public static SongData.DifficultyData? GetCustomLevelSongDifficultyData(BeatmapKey beatmapKey)
         {
+            if (string.IsNullOrEmpty(beatmapKey.levelId))
+            {
+                return null;
+            }
+
             SongData? songData = null;
 
             if (beatmapKey.levelId.StartsWith(CustomLevelLoader.kCustomLevelPrefixId, StringComparison.Ordinal))
