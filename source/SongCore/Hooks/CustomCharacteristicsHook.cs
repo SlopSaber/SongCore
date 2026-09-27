@@ -10,6 +10,7 @@ namespace SongCore.Hooks
     internal class CustomCharacteristicsHook : IInitializable, IDisposable
     {
         private const BeatmapCharacteristic LawlessCharacteristic = (BeatmapCharacteristic)6;
+        private const BeatmapCharacteristic LightshowCharacteristic = (BeatmapCharacteristic)7;
 
         private Hook _getBeatmapCharacteristicBySerializedNameHook = null!;
         private Hook _parseBeatmapCharacteristicHook = null!;
@@ -51,32 +52,43 @@ namespace SongCore.Hooks
                 return true;
             }
 
+            if (serializedName == "Lightshow")
+            {
+                characteristic = LightshowCharacteristic;
+                return true;
+            }
+
             return original(serializedName, out characteristic);
         }
 
         private string SerializedName(Func<BeatmapCharacteristic, string> original, BeatmapCharacteristic characteristic)
         {
-            return characteristic == LawlessCharacteristic ? "Lawless" : original(characteristic);
+            return characteristic == LawlessCharacteristic ? "Lawless" :
+                characteristic == LightshowCharacteristic ? "Lightshow" : original(characteristic);
         }
 
         private string CompoundIdPartName(Func<BeatmapCharacteristic, string> original, BeatmapCharacteristic characteristic)
         {
-            return characteristic == LawlessCharacteristic ? "Lawless" : original(characteristic);
+            return characteristic == LawlessCharacteristic ? "Lawless" :
+                characteristic == LightshowCharacteristic ? "Lightshow" : original(characteristic);
         }
 
         private string NameLocalizationKey(Func<BeatmapCharacteristic, string> original, BeatmapCharacteristic characteristic)
         {
-            return characteristic == LawlessCharacteristic ? "Lawless" : original(characteristic);
+            return characteristic == LawlessCharacteristic ? "Lawless" :
+                characteristic == LightshowCharacteristic ? "Lightshow" : original(characteristic);
         }
 
         private string HintLocalizationKey(Func<BeatmapCharacteristic, string> original, BeatmapCharacteristic characteristic)
         {
-            return characteristic == LawlessCharacteristic ? "Lawless - Anything Goes" : original(characteristic);
+            return characteristic == LawlessCharacteristic ? "Lawless - Anything Goes" :
+                characteristic == LightshowCharacteristic ? "Lightshow" : original(characteristic);
         }
 
         private Sprite GetCharacteristicIcon(Func<BeatmapCharacteristicCollection, BeatmapCharacteristic, Sprite> original, BeatmapCharacteristicCollection instance, BeatmapCharacteristic characteristic)
         {
-            return characteristic == LawlessCharacteristic ? UI.BasicUI.ExtraDiffsIcon! : original(instance, characteristic);
+            return characteristic == LawlessCharacteristic ? UI.BasicUI.ExtraDiffsIcon! :
+                characteristic == LightshowCharacteristic ? UI.BasicUI.LightshowIcon! : original(instance, characteristic);
         }
 
         private BeatmapCharacteristicSO? GetCustomCharacteristic(Func<BeatmapCharacteristicCollection, string, BeatmapCharacteristicSO> original, BeatmapCharacteristicCollection instance, string serializedName)
