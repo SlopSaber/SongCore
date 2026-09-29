@@ -1,13 +1,16 @@
-using SongCore.Data;
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Tasks;
 using BeatmapLevelSaveDataVersion4;
-using Newtonsoft.Json;
+using BGLib.JsonExtension;
+using SongCore.Data;
+using SongCore.Hooks.BeatmapLevelCache;
 
 namespace SongCore.Utilities
 {
@@ -18,37 +21,30 @@ namespace SongCore.Utilities
         public static readonly string cachedHashDataPath = Path.Combine(IPA.Utilities.UnityGame.UserDataPath, nameof(SongCore), "SongHashData.dat");
         public static readonly string cachedAudioDataPath = Path.Combine(IPA.Utilities.UnityGame.UserDataPath, nameof(SongCore), "SongDurationCache.dat");
 
-        public static void ReadCachedSongHashes()
+        internal static async Task LoadCachedSongHashesAsync()
         {
-            if (File.Exists(cachedHashDataPath))
+            if (!File.Exists(cachedHashDataPath))
             {
-                try
+                return;
+            }
+
+            try
+            {
+                var songHashData = await Task.Run(() => JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, SongHashData>>(cachedHashDataPath));
+                if (songHashData != null)
                 {
-                    var songHashData = JsonConvert.DeserializeObject<ConcurrentDictionary<string, SongHashData>>(File.ReadAllText(cachedHashDataPath));
-                    if (songHashData != null)
-                    {
-                        cachedSongHashData = songHashData;
-                        Plugin.Log.Info($"Finished loading cached hashes for {cachedSongHashData.Count} songs.");
-                    }
+                    cachedSongHashData = songHashData;
+                    Plugin.Log.Info($"Finished loading cached hashes for {cachedSongHashData.Count} songs.");
                 }
-                catch (Exception ex)
-                {
-                    Plugin.Log.Error($"Error loading cached song hashes: {ex.Message}");
-                    Plugin.Log.Error(ex);
-                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Error loading cached song hashes: {ex.Message}");
+                Plugin.Log.Error(ex);
             }
         }
 
-        public static void UpdateCachedHashes(HashSet<string> currentSongPaths)
-        {
-            UpdateCachedHashesInternal(currentSongPaths);
-        }
-
-        /// <summary>
-        /// Intended for use in the Loader
-        /// </summary>
-        /// <param name="currentSongPaths"></param>
-        internal static void UpdateCachedHashesInternal(ICollection<string> currentSongPaths)
+        internal static async Task SaveCachedSongHashesAsync(ICollection<string> currentSongPaths)
         {
             foreach (var levelPath in cachedSongHashData.Keys)
             {
@@ -59,10 +55,11 @@ namespace SongCore.Utilities
                 }
             }
 
+            Plugin.Log.Info($"Saving cached hashes for {cachedSongHashData.Count} songs.");
+
             try
             {
-                Plugin.Log.Info($"Saving cached hashes for {cachedSongHashData.Count} songs.");
-                File.WriteAllText(cachedHashDataPath, JsonConvert.SerializeObject(cachedSongHashData));
+                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(cachedSongHashData, cachedHashDataPath));
             }
             catch (Exception ex)
             {
@@ -71,37 +68,30 @@ namespace SongCore.Utilities
             }
         }
 
-        public static void ReadCachedAudioData()
+        internal static async Task LoadCachedAudioDataAsync()
         {
-            if (File.Exists(cachedAudioDataPath))
+            if (!File.Exists(cachedAudioDataPath))
             {
-                try
+                return;
+            }
+
+            try
+            {
+                var audioData = await Task.Run(() => JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, AudioCacheData>>(cachedAudioDataPath));
+                if (audioData != null)
                 {
-                    var audioData = JsonConvert.DeserializeObject<ConcurrentDictionary<string, AudioCacheData>>(File.ReadAllText(cachedAudioDataPath));
-                    if (audioData != null)
-                    {
-                        cachedAudioData = audioData;
-                        Plugin.Log.Info($"Finished loading cached durations for {cachedAudioData.Count} songs.");
-                    }
+                    cachedAudioData = audioData;
+                    Plugin.Log.Info($"Finished loading cached durations for {cachedAudioData.Count} songs.");
                 }
-                catch (Exception ex)
-                {
-                    Plugin.Log.Error($"Error loading cached song durations: {ex.Message}");
-                    Plugin.Log.Error(ex);
-                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Error loading cached song durations: {ex.Message}");
+                Plugin.Log.Error(ex);
             }
         }
 
-        public static void UpdateCachedAudioData(HashSet<string> currentSongPaths)
-        {
-            UpdateCachedAudioDataInternal(currentSongPaths);
-        }
-
-        /// <summary>
-        /// Intended for use in the Loader
-        /// </summary>
-        /// <param name="currentSongPaths"></param>
-        internal static void UpdateCachedAudioDataInternal(ICollection<string> currentSongPaths)
+        internal static async Task SaveCachedAudioDataAsync(ICollection<string> currentSongPaths)
         {
             foreach (var levelPath in cachedAudioData.Keys)
             {
@@ -112,10 +102,11 @@ namespace SongCore.Utilities
                 }
             }
 
+            Plugin.Log.Info($"Saving cached durations for {cachedAudioData.Count} songs.");
+
             try
             {
-                Plugin.Log.Info($"Saving cached durations for {cachedAudioData.Count} songs.");
-                File.WriteAllText(cachedAudioDataPath, JsonConvert.SerializeObject(cachedAudioData));
+                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(cachedAudioData, cachedAudioDataPath));
             }
             catch (Exception ex)
             {
@@ -127,8 +118,8 @@ namespace SongCore.Utilities
         private static long GetDirectoryHash(string directory)
         {
             long hash = 0;
-            DirectoryInfo directoryInfo = new DirectoryInfo(directory);
-            foreach (FileInfo f in directoryInfo.GetFiles())
+            var directoryInfo = new DirectoryInfo(directory);
+            foreach (var f in directoryInfo.EnumerateFiles())
             {
                 hash ^= f.CreationTimeUtc.ToFileTimeUtc();
                 hash ^= f.LastWriteTimeUtc.ToFileTimeUtc();
@@ -152,38 +143,6 @@ namespace SongCore.Utilities
 
             cachedSongHash = string.Empty;
             return false;
-        }
-
-        [Obsolete("If your intent is to hash the custom level, use ComputeCustomLevelHash. Otherwise, use Collections.GetCustomLevelHash.", true)]
-        public static string GetCustomLevelHash(BeatmapLevel level)
-        {
-            var hash = string.Empty;
-
-            if (Loader.CustomLevelLoader._loadedBeatmapSaveData.TryGetValue(level.levelID, out var loadedSaveData))
-            {
-                if (loadedSaveData.standardLevelInfoSaveData != null)
-                {
-                    hash = ComputeCustomLevelHash(loadedSaveData.customLevelFolderInfo, loadedSaveData.standardLevelInfoSaveData);
-                }
-                else if (loadedSaveData.beatmapLevelSaveData != null)
-                {
-                    hash = ComputeCustomLevelHash(loadedSaveData.customLevelFolderInfo, loadedSaveData.beatmapLevelSaveData);
-                }
-            }
-
-            return hash;
-        }
-
-        [Obsolete("If your intent is to hash the custom level, use ComputeCustomLevelHash. Otherwise, use Collections.GetCustomLevelHash.", true)]
-        public static string GetCustomLevelHash(CustomLevelFolderInfo customLevelFolderInfo, StandardLevelInfoSaveData standardLevelInfoSaveData)
-        {
-            return ComputeCustomLevelHash(customLevelFolderInfo, standardLevelInfoSaveData);
-        }
-
-        [Obsolete("If your intent is to hash the custom level, use ComputeCustomLevelHash. Otherwise, use Collections.GetCustomLevelHash.", true)]
-        public static string GetCustomLevelHash(CustomLevelFolderInfo customLevelFolderInfo, BeatmapLevelSaveData beatmapLevelSaveData)
-        {
-            return ComputeCustomLevelHash(customLevelFolderInfo, beatmapLevelSaveData);
         }
 
         public static string ComputeCustomLevelHash(BeatmapLevel level)
@@ -212,16 +171,26 @@ namespace SongCore.Utilities
                 return songHash;
             }
 
-            var prependBytes = Encoding.UTF8.GetBytes(customLevelFolderInfo.levelInfoJsonString);
+            var infoPath = Path.Combine(customLevelFolderInfo.folderPath, CustomLevelPathHelper.kStandardLevelInfoFilename);
             var files = standardLevelInfoSaveData.difficultyBeatmapSets
                 .SelectMany(difficultyBeatmapSet => difficultyBeatmapSet.difficultyBeatmaps)
                 .Select(difficultyBeatmap => Path.Combine(customLevelFolderInfo.folderPath, difficultyBeatmap.beatmapFilename))
-                .Where(File.Exists);
+                .Where(File.Exists)
+                .Prepend(infoPath);
 
-            string hash = CreateSha1FromFilesWithPrependBytes(prependBytes, files);
-            TryGetRelativePath(customLevelFolderInfo.folderPath, out var relativePath);
-            cachedSongHashData[relativePath] = new SongHashData(directoryHash, hash);
-            return hash;
+            IOBlacklistHook.AllowIO.Value = true;
+            try
+            {
+                var hash = CreateSha1FromLevelFiles(files);
+                TryGetRelativePath(customLevelFolderInfo.folderPath, out var relativePath);
+                cachedSongHashData[relativePath] = new SongHashData(directoryHash, hash);
+
+                return hash;
+            }
+            finally
+            {
+                IOBlacklistHook.AllowIO.Value = false;
+            }
         }
 
         public static string ComputeCustomLevelHash(CustomLevelFolderInfo customLevelFolderInfo, BeatmapLevelSaveData beatmapLevelSaveData)
@@ -231,18 +200,27 @@ namespace SongCore.Utilities
                 return songHash;
             }
 
-            var prependBytes = Encoding.UTF8.GetBytes(customLevelFolderInfo.levelInfoJsonString);
+            var infoPath = Path.Combine(customLevelFolderInfo.folderPath, CustomLevelPathHelper.kStandardLevelInfoFilename);
             var audioDataPath = Path.Combine(customLevelFolderInfo.folderPath, beatmapLevelSaveData.audio.audioDataFilename);
             var files = beatmapLevelSaveData.difficultyBeatmaps.SelectMany(difficultyBeatmap => new[]
             {
                 Path.Combine(customLevelFolderInfo.folderPath, difficultyBeatmap.beatmapDataFilename),
                 Path.Combine(customLevelFolderInfo.folderPath, difficultyBeatmap.lightshowDataFilename)
-            }).Prepend(audioDataPath).Where(File.Exists);
+            }).Prepend(audioDataPath).Where(File.Exists).Prepend(infoPath);
 
-            string hash = CreateSha1FromFilesWithPrependBytes(prependBytes, files);
-            TryGetRelativePath(customLevelFolderInfo.folderPath, out var relativePath);
-            cachedSongHashData[relativePath] = new SongHashData(directoryHash, hash);
-            return hash;
+            IOBlacklistHook.AllowIO.Value = true;
+            try
+            {
+                var hash = CreateSha1FromLevelFiles(files);
+                TryGetRelativePath(customLevelFolderInfo.folderPath, out var relativePath);
+                cachedSongHashData[relativePath] = new SongHashData(directoryHash, hash);
+
+                return hash;
+            }
+            finally
+            {
+                IOBlacklistHook.AllowIO.Value = false;
+            }
         }
 
         public static string GetAbsolutePath(string path)
@@ -289,7 +267,7 @@ namespace SongCore.Utilities
 
         public static bool IsInInstallPath(string path)
         {
-            string fromPath = IPA.Utilities.UnityGame.InstallPath;
+            var fromPath = IPA.Utilities.UnityGame.InstallPath;
 
             if (!fromPath.EndsWith(Path.DirectorySeparatorChar))
             {
@@ -299,42 +277,46 @@ namespace SongCore.Utilities
             return path.StartsWith(fromPath, StringComparison.Ordinal);
         }
 
-        // Black magic https://stackoverflow.com/questions/311165/how-do-you-convert-a-byte-array-to-a-hexadecimal-string-and-vice-versa/14333437#14333437
-        private static string ByteToHexBitFiddle(byte[] bytes)
+        private static string ToHexString(byte[] bytes)
         {
-            char[] c = new char[bytes.Length * 2];
-            int b;
-            for (int i = 0; i < bytes.Length; i++)
+            return string.Create(bytes.Length * 2, bytes, (chars, state) =>
             {
-                b = bytes[i] >> 4;
-                c[i * 2] = (char) (55 + b + (((b - 10) >> 31) & -7));
-                b = bytes[i] & 0xF;
-                c[i * 2 + 1] = (char) (55 + b + (((b - 10) >> 31) & -7));
-            }
-            return new string(c);
+                for (var i = 0; i < state.Length; i++)
+                {
+                    // https://stackoverflow.com/questions/311165/how-do-you-convert-a-byte-array-to-a-hexadecimal-string-and-vice-versa/14333437#14333437
+                    var b = state[i] >> 4;
+                    chars[i * 2] = (char)(b < 10 ? '0' + b : 'A' - 10 + b);
+                    b = state[i] & 0xF;
+                    chars[i * 2 + 1] = (char)(b < 10 ? '0' + b : 'A' - 10 + b);
+                }
+            });
         }
 
-
-        private static string CreateSha1FromFilesWithPrependBytes(byte[] prependBytes, IEnumerable<string> files)
+        private static string CreateSha1FromLevelFiles(IEnumerable<string> files)
         {
-            using var sha1 = SHA1.Create();
-            var buffer = new byte[8192];
+            using var incrementalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
 
-            sha1.TransformBlock(prependBytes, 0, prependBytes.Length, null, 0);
-
-            foreach (var file in files)
+            var buffer = ArrayPool<byte>.Shared.Rent(131072);
+            try
             {
-                using var fileStream = File.Open(file, FileMode.Open);
-                int bytesRead;
-                while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
+                foreach (var file in files)
                 {
-                    sha1.TransformBlock(buffer, 0, bytesRead, null, 0);
+                    // Large reads go directly into our buffer, so the internal buffer size is irrelevant.
+                    using var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);
+
+                    int bytesRead;
+                    while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        incrementalHash.AppendData(buffer, 0, bytesRead);
+                    }
                 }
             }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
 
-            sha1.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-
-            return ByteToHexBitFiddle(sha1.Hash);
+            return ToHexString(incrementalHash.GetHashAndReset());
         }
     }
 }

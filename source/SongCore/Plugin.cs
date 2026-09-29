@@ -1,6 +1,4 @@
-using System;
 using System.IO;
-using HarmonyLib;
 using IPA;
 using IPA.Config;
 using IPA.Config.Stores;
@@ -9,7 +7,6 @@ using IPA.Logging;
 using IPA.Utilities;
 using SiraUtil.Zenject;
 using SongCore.Installers;
-using SongCore.Patches;
 using SongCore.UI;
 
 namespace SongCore
@@ -18,11 +15,8 @@ namespace SongCore
     public class Plugin
     {
         private readonly PluginMetadata _metadata;
-        private readonly Harmony _harmony;
 
         internal static Logger Log { get; private set; } = null!;
-
-        public static Action<bool, string, string, BeatmapLevel>? CustomSongPlatformSelectionDidChange;
 
         [Init]
         public Plugin(Logger logger, PluginMetadata metadata, Zenjector zenjector)
@@ -32,7 +26,6 @@ namespace SongCore
 
             Log = logger;
             _metadata = metadata;
-            _harmony = new Harmony("com.kyle1413.BeatSaber.SongCore");
 
             zenjector.UseLogger(logger);
             zenjector.Install<AppInstaller>(Location.App, Config.GetConfigFor(nameof(SongCore) + Path.DirectorySeparatorChar + nameof(SongCore)).Generated<PluginConfig>());
@@ -43,22 +36,9 @@ namespace SongCore
         [OnStart]
         public void OnApplicationStart()
         {
-            if (typeof(Harmony).Assembly.GetName().Version.Minor < 12)
-            {
-                _harmony.Patch(HarmonyTranspilersFixPatch.TargetMethod(), null, null, new HarmonyMethod(AccessTools.DeclaredMethod(typeof(HarmonyTranspilersFixPatch), nameof(HarmonyTranspilersFixPatch.Transpiler))));
-            }
-            _harmony.PatchAll(_metadata.Assembly);
-
             BasicUI.GetIcons();
 
-            if (!File.Exists(Collections.DataPath))
-            {
-                File.Create(Collections.DataPath);
-            }
-            else
-            {
-                Collections.LoadCustomLevelSongData();
-            }
+            _ = Collections.LoadCachedSongDataAsync();
 
             Collections.RegisterCustomCharacteristic(BasicUI.MissingCharIcon!, "Missing Characteristic", "Missing Characteristic", "MissingCharacteristic", "MissingCharacteristic", false, false, 1000);
             Collections.RegisterCustomCharacteristic(BasicUI.LightshowIcon!, "Lightshow", "Lightshow", "Lightshow", "Lightshow", false, false, 100);

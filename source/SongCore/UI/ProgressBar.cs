@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Concurrent;
+using BeatSaber.Destinations;
 using BeatSaberMarkupLanguage;
 using SongCore.Utilities;
 using TMPro;
@@ -14,7 +15,12 @@ namespace SongCore.UI
 {
     public class ProgressBar : MonoBehaviour
     {
-        private TimeTweeningManager _tweeningManager;
+        private TimeTweeningManager? _tweeningManagerValue;
+        private TimeTweeningManager _tweeningManager
+        {
+            get => _tweeningManagerValue ?? throw new System.InvalidOperationException("_tweeningManager has not been initialized.");
+            set => _tweeningManagerValue = value;
+        }
 
         [Inject]
         private void Construct(TimeTweeningManager tweeningManager)
@@ -22,13 +28,43 @@ namespace SongCore.UI
             _tweeningManager = tweeningManager;
         }
 
-        private Canvas? _canvas;
-        private CanvasGroup? _canvasGroup;
-        private FloatTween? _floatTween;
-        private TMP_Text? _pluginNameText;
-        private TMP_Text? _headerText;
-        private Image? _loadingBackg;
-        private Image? _loadingBar;
+        private Canvas? _canvasValue;
+        private Canvas _canvas
+        {
+            get => _canvasValue ?? throw new System.InvalidOperationException("_canvas has not been initialized.");
+            set => _canvasValue = value;
+        }
+        private CanvasGroup? _canvasGroupValue;
+        private CanvasGroup _canvasGroup
+        {
+            get => _canvasGroupValue ?? throw new System.InvalidOperationException("_canvasGroup has not been initialized.");
+            set => _canvasGroupValue = value;
+        }
+        private Tweening.FloatTween? _floatTween;
+        private TMP_Text? _pluginNameTextValue;
+        private TMP_Text _pluginNameText
+        {
+            get => _pluginNameTextValue ?? throw new System.InvalidOperationException("_pluginNameText has not been initialized.");
+            set => _pluginNameTextValue = value;
+        }
+        private TMP_Text? _headerTextValue;
+        private TMP_Text _headerText
+        {
+            get => _headerTextValue ?? throw new System.InvalidOperationException("_headerText has not been initialized.");
+            set => _headerTextValue = value;
+        }
+        private Image? _loadingBackgValue;
+        private Image _loadingBackg
+        {
+            get => _loadingBackgValue ?? throw new System.InvalidOperationException("_loadingBackg has not been initialized.");
+            set => _loadingBackgValue = value;
+        }
+        private Image? _loadingBarValue;
+        private Image _loadingBar
+        {
+            get => _loadingBarValue ?? throw new System.InvalidOperationException("_loadingBar has not been initialized.");
+            set => _loadingBarValue = value;
+        }
 
         private static bool _jokeTime = false;
         private static readonly Vector3 Position = new Vector3(0, 2.5f, 2.5f);
@@ -76,12 +112,12 @@ namespace SongCore.UI
         {
             if (_floatTween != null)
             {
-                FloatTween.Pool.Despawn(_floatTween);
+                Tweening.FloatTween.Pool.Despawn(_floatTween);
                 _floatTween = null;
             }
 
             var startAlpha = _canvasGroup.alpha;
-            _floatTween = FloatTween.Pool.Spawn(startAlpha, endAlpha, alpha =>
+            _floatTween = Tweening.FloatTween.Pool.Spawn(startAlpha, endAlpha, alpha =>
             {
                 _canvasGroup.alpha = alpha;
             }, 0.25f, EaseType.OutQuad, 0f);
@@ -99,7 +135,7 @@ namespace SongCore.UI
                     _canvas.enabled = false;
                 }
 
-                FloatTween.Pool.Despawn(_floatTween);
+                Tweening.FloatTween.Pool.Despawn(_floatTween);
                 _floatTween = null;
             };
 
@@ -122,7 +158,7 @@ namespace SongCore.UI
 
         private void SceneManagerOnActiveSceneChanged(Scene oldScene, Scene newScene)
         {
-            if (newScene.name == "MainMenu")
+            if (newScene.name == SceneNames.kMainMenuSceneName)
             {
                 if (_showingMessage)
                 {
@@ -149,7 +185,7 @@ namespace SongCore.UI
         private void SongLoaderOnSongsLoadedEvent(Loader loader, ConcurrentDictionary<string, BeatmapLevel> customLevels)
         {
             _showingMessage = false;
-            string songOrSongs = customLevels.Count == 1 ? "song" : "songs";
+            var songOrSongs = customLevels.Count == 1 ? "song" : "songs";
             _headerText.text = $"{customLevels.Count} {(_jokeTime ? $"{songOrSongs} deleted" : $"{songOrSongs} loaded")}";
             _loadingBar.enabled = false;
             _loadingBackg.enabled = false;
@@ -175,23 +211,24 @@ namespace SongCore.UI
 
             _canvas = gameObject.AddComponent<Canvas>();
             _canvas.renderMode = RenderMode.WorldSpace;
+            _canvas.additionalShaderChannels |= AdditionalCanvasShaderChannels.TexCoord2;
             _canvas.enabled = false;
             _canvasGroup = gameObject.AddComponent<CanvasGroup>();
             _canvasGroup.alpha = 0f;
-            var rectTransform = _canvas.transform as RectTransform;
+            var rectTransform = (RectTransform)_canvas.transform;
             rectTransform.sizeDelta = CanvasSize;
 
             var pluginText = _jokeTime ? "SongCore Cleaner" : PluginNameText;
-            _pluginNameText = BeatSaberUI.CreateText(_canvas.transform as RectTransform, pluginText, PluginNamePosition);
-            rectTransform = _pluginNameText.transform as RectTransform;
+            _pluginNameText = BeatSaberUI.CreateCurvedUIText((RectTransform)_canvas.transform, pluginText, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), PluginNamePosition, new Vector2(60, 10));
+            rectTransform = (RectTransform)_pluginNameText.transform;
             rectTransform.SetParent(_canvas.transform, false);
             rectTransform.sizeDelta = HeaderSize;
             rectTransform.anchoredPosition = PluginNamePosition;
             _pluginNameText.text = pluginText;
             _pluginNameText.fontSize = PluginNameFontSize;
 
-            _headerText = BeatSaberUI.CreateText(_canvas.transform as RectTransform, HeaderText, HeaderPosition);
-            rectTransform = _headerText.transform as RectTransform;
+            _headerText = BeatSaberUI.CreateCurvedUIText((RectTransform)_canvas.transform, HeaderText, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), HeaderPosition, new Vector2(60, 10));
+            rectTransform = (RectTransform)_headerText.transform;
             rectTransform.SetParent(_canvas.transform, false);
             rectTransform.anchoredPosition = HeaderPosition;
             rectTransform.sizeDelta = HeaderSize;
@@ -199,13 +236,13 @@ namespace SongCore.UI
             _headerText.fontSize = HeaderFontSize;
 
             _loadingBackg = new GameObject("Background").AddComponent<Image>();
-            rectTransform = _loadingBackg.transform as RectTransform;
+            rectTransform = (RectTransform)_loadingBackg.transform;
             rectTransform.SetParent(_canvas.transform, false);
             rectTransform.sizeDelta = LoadingBarSize;
             _loadingBackg.color = BackgroundColor;
 
             _loadingBar = new GameObject("Loading Bar").AddComponent<Image>();
-            rectTransform = _loadingBar.transform as RectTransform;
+            rectTransform = (RectTransform)_loadingBar.transform;
             rectTransform.SetParent(_canvas.transform, false);
             rectTransform.sizeDelta = LoadingBarSize;
             var tex = Texture2D.whiteTexture;

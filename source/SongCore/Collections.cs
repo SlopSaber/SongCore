@@ -1,7 +1,3 @@
-using Newtonsoft.Json;
-using SongCore.Data;
-using SongCore.Utilities;
-using IPA.Utilities;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -9,6 +5,10 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using BGLib.JsonExtension;
+using Newtonsoft.Json;
+using IPA.Utilities;
+using SongCore.Data;
 using UnityEngine;
 
 namespace SongCore
@@ -33,12 +33,6 @@ namespace SongCore
             return HashLevelDictionary.ContainsKey(hash);
         }
 
-        [Obsolete("Use GetCustomLevelHash instead.", true)]
-        public static string hashForLevelID(string levelID)
-        {
-            return GetCustomLevelHash(levelID);
-        }
-
         // TODO: Replace by better naming.
         public static List<string> levelIDsForHash(string hash)
         {
@@ -48,12 +42,6 @@ namespace SongCore
         public static string GetCustomLevelHash(string levelID)
         {
             return LevelHashDictionary.TryGetValue(levelID, out var hash) ? hash : string.Empty;
-        }
-
-        [Obsolete("Get the loaded save data from CustomLevelLoader._loadedBeatmapSaveData.", true)]
-        public static CustomLevelLoader.LoadedSaveData? GetLoadedSaveData(string levelID)
-        {
-            return Loader.CustomLevelLoader._loadedBeatmapSaveData.TryGetValue(levelID, out var loadedSaveData) ? loadedSaveData : null;
         }
 
         public static SongData? GetCustomLevelSongData(string levelID)
@@ -70,31 +58,13 @@ namespace SongCore
             }
         }
 
-        [Obsolete("Get the song data with GetCustomLevelSongData instead.", true)]
-        public static ExtraSongData? RetrieveExtraSongData(string hash)
-        {
-            return GetCustomLevelSongData(CustomLevelLoader.kCustomLevelPrefixId + hash)?.ToExtraSongData();
-        }
-
-        [Obsolete("Get the song difficulty data with GetCustomLevelSongDifficultyData instead.", true)]
-        public static ExtraSongData.DifficultyData? RetrieveDifficultyData(BeatmapLevel beatmapLevel, BeatmapKey beatmapKey)
-        {
-            ExtraSongData? songData = null;
-
-            if (!beatmapLevel.hasPrecalculatedData)
-            {
-                songData = RetrieveExtraSongData(GetCustomLevelHash(beatmapLevel.levelID));
-            }
-
-            var diffData = songData?._difficulties.FirstOrDefault(x =>
-                x._difficulty == beatmapKey.difficulty && (x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.characteristicNameLocalizationKey ||
-                                                        x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.serializedName));
-
-            return diffData;
-        }
-
         public static SongData.DifficultyData? GetCustomLevelSongDifficultyData(BeatmapKey beatmapKey)
         {
+            if (string.IsNullOrEmpty(beatmapKey.levelId))
+            {
+                return null;
+            }
+
             SongData? songData = null;
 
             if (beatmapKey.levelId.StartsWith(CustomLevelLoader.kCustomLevelPrefixId, StringComparison.Ordinal))
@@ -104,42 +74,54 @@ namespace SongCore
             }
 
             var diffData = songData?._difficulties.FirstOrDefault(x =>
-                x._difficulty == beatmapKey.difficulty && (x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.characteristicNameLocalizationKey ||
-                                                           x._beatmapCharacteristicName == beatmapKey.beatmapCharacteristic.serializedName));
+                x._difficulty == beatmapKey.difficulty && (x._beatmapCharacteristicName == beatmapKey.characteristic.NameLocalizationKey() ||
+                                                           x._beatmapCharacteristicName == beatmapKey.characteristic.SerializedName()));
 
             return diffData;
         }
 
-        internal static void LoadCustomLevelSongData()
+        internal static async Task LoadCachedSongDataAsync()
         {
-            Task.Run(() =>
+            if (!File.Exists(DataPath))
             {
-                try
-                {
-                    using var reader = new JsonTextReader(new StreamReader(DataPath));
-                    var serializer = JsonSerializer.CreateDefault();
-                    var songData = serializer.Deserialize<ConcurrentDictionary<string, SongData>?>(reader);
-                    if (songData != null)
-                    {
-                        CustomSongsData = songData;
-                        Plugin.Log.Info($"Finished loading cached song data for {CustomSongsData.Count} songs.");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Plugin.Log.Error($"Error loading cached song data: {ex.Message}");
-                    Plugin.Log.Error(ex);
-                }
-            });
-        }
+                return;
+            }
 
-        internal static async Task SaveCustomLevelSongDataAsync()
-        {
             try
             {
-                Plugin.Log.Info($"Saving cached song data for {CustomSongsData.Count} songs.");
-                await using var writer = new StreamWriter(DataPath);
-                await writer.WriteAsync(JsonConvert.SerializeObject(CustomSongsData, Formatting.None));
+                var songData = await Task.Run(() =>
+                {
+                    using var reader = File.OpenText(DataPath);
+                    using var json = new JsonTextReader(reader);
+                    // Keep cache parsing independent of process-wide serializer overrides.
+                    var serializer = JsonSerializer.Create(JsonSettings.readableWithDefault);
+                    serializer.CheckAdditionalContent = true;
+                    return serializer.Deserialize<ConcurrentDictionary<string, SongData>>(json);
+                });
+                if (songData != null)
+                {
+                    CustomSongsData = songData;
+                    Plugin.Log.Info($"Finished loading cached song data for {CustomSongsData.Count} songs.");
+                }
+                else
+                {
+                    Plugin.Log.Info("Song metadata cache is empty; rebuilding it from installed maps.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Error loading cached song data: {ex.Message}");
+                Plugin.Log.Error(ex);
+            }
+        }
+
+        internal static async Task SaveCachedSongDataAsync()
+        {
+            Plugin.Log.Info($"Saving cached song data for {CustomSongsData.Count} songs.");
+
+            try
+            {
+                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(CustomSongsData, DataPath));
             }
             catch (Exception ex)
             {

@@ -12,23 +12,23 @@ namespace SongCore.Data
     [Serializable]
     public class SongData
     {
-        public string[] _genreTags;
-        public Contributor[] contributors; //convert legacy mappers/lighters fields into contributors
-        public string _customEnvironmentName;
-        public string _customEnvironmentHash;
-        public DifficultyData[] _difficulties;
-        public string _defaultCharacteristic = null;
+        public string[] _genreTags = Array.Empty<string>();
+        public Contributor[] contributors = Array.Empty<Contributor>(); //convert legacy mappers/lighters fields into contributors
+        public string? _customEnvironmentName;
+        public string? _customEnvironmentHash;
+        public DifficultyData[] _difficulties = Array.Empty<DifficultyData>();
+        public string? _defaultCharacteristic;
 
-        public ColorScheme[] _colorSchemes; //beatmap 2.1.0, community decided to song-core ify colour stuff
-        public string[] _environmentNames; //these have underscores but the actual format doesnt, I genuinely dont know what to go by so I went consistent with songcore
+        public ColorScheme[] _colorSchemes = Array.Empty<ColorScheme>(); //beatmap 2.1.0, community decided to song-core ify colour stuff
+        public string[] _environmentNames = Array.Empty<string>(); //these have underscores but the actual format doesnt, I genuinely dont know what to go by so I went consistent with songcore
 
         //PinkCore Port
-        public CharacteristicDetails[] _characteristicDetails;
+        public CharacteristicDetails[]? _characteristicDetails;
 
         [Serializable]
         public class CharacteristicDetails
         {
-            public string _beatmapCharacteristicName;
+            public string _beatmapCharacteristicName = string.Empty;
             public string? _characteristicLabel;
             public string? _characteristicIconFilePath = null;
         }
@@ -37,9 +37,9 @@ namespace SongCore.Data
         [Serializable]
         public class Contributor
         {
-            public string _role;
-            public string _name;
-            public string _iconPath;
+            public string _role = string.Empty;
+            public string _name = string.Empty;
+            public string _iconPath = string.Empty;
 
             [NonSerialized]
             public Sprite? icon = null;
@@ -48,10 +48,10 @@ namespace SongCore.Data
         [Serializable]
         public class DifficultyData
         {
-            public string _beatmapCharacteristicName;
+            public string _beatmapCharacteristicName = string.Empty;
             public BeatmapDifficulty _difficulty;
-            public string _difficultyLabel;
-            public RequirementData additionalDifficultyData;
+            public string _difficultyLabel = string.Empty;
+            public RequirementData additionalDifficultyData = new RequirementData();
             public MapColor? _colorLeft;
             public MapColor? _colorRight;
             public MapColor? _envColorLeft;
@@ -68,14 +68,14 @@ namespace SongCore.Data
             public bool? _oneSaber;
             public bool? _showRotationNoteSpawnLines;
             //Tags
-            public string[] _styleTags;
+            public string[] _styleTags = Array.Empty<string>();
         }
 
         [Serializable]
         public class ColorScheme //stuck to the same naming convention as the json itself
         {
             public bool useOverride;
-            public string colorSchemeId;
+            public string colorSchemeId = string.Empty;
             public MapColor? saberAColor;
             public MapColor? saberBColor;
             public MapColor? environmentColor0;
@@ -92,10 +92,10 @@ namespace SongCore.Data
         [Serializable]
         public class RequirementData
         {
-            public string[] _requirements;
-            public string[] _suggestions;
-            public string[] _warnings;
-            public string[] _information;
+            public string[] _requirements = Array.Empty<string>();
+            public string[] _suggestions = Array.Empty<string>();
+            public string[] _warnings = Array.Empty<string>();
+            public string[] _information = Array.Empty<string>();
         }
 
         [Serializable]
@@ -123,12 +123,12 @@ namespace SongCore.Data
         }
 
         [JsonConstructor]
-        public SongData(string levelID, Contributor[] contributors, string customEnvironmentName, string customEnvironmentHash, DifficultyData[] difficulties)
+        public SongData(string levelID, Contributor[]? contributors, string? customEnvironmentName, string? customEnvironmentHash, DifficultyData[]? difficulties)
         {
-            this.contributors = contributors;
+            this.contributors = contributors ?? Array.Empty<Contributor>();
             _customEnvironmentName = customEnvironmentName;
             _customEnvironmentHash = customEnvironmentHash;
-            _difficulties = difficulties;
+            _difficulties = difficulties ?? Array.Empty<DifficultyData>();
         }
 
         internal void PopulateFromLoadedSaveData(CustomLevelLoader.LoadedSaveData loadedSaveData)
@@ -145,10 +145,10 @@ namespace SongCore.Data
                     {
                         var customData = (JObject)customDataToken;
                         contributors = customData.TryGetValue("_contributors", out var contributorsToken)
-                            ? contributorsToken.ToObject<Contributor[]>()
+                            ? contributorsToken.ToObject<Contributor[]>() ?? Array.Empty<Contributor>()
                             : Array.Empty<Contributor>();
                         _genreTags = customData.TryGetValue("_genreTags", out var genreTagsToken)
-                            ? genreTagsToken.ToObject<string[]>()
+                            ? genreTagsToken.ToObject<string[]>() ?? Array.Empty<string>()
                             : Array.Empty<string>();
                         _customEnvironmentName = customData.Value<string>("_customEnvironment");
                         _customEnvironmentHash = customData.Value<string>("_customEnvironmentHash");
@@ -160,7 +160,7 @@ namespace SongCore.Data
                     }
 
                     _environmentNames = levelInfo.TryGetValue("_environmentNames", out var environmentNamesToken)
-                        ? environmentNamesToken.ToObject<string[]>()
+                        ? environmentNamesToken.ToObject<string[]>() ?? Array.Empty<string>()
                         : Array.Empty<string>();
 
                     if (levelInfo.TryGetValue("_colorSchemes", out var colorSchemesToken))
@@ -189,19 +189,19 @@ namespace SongCore.Data
                                 environmentColorW = GetMapColorFromJObject(colorScheme, "environmentColorW"),
                                 environmentColorWBoost = GetMapColorFromJObject(colorScheme, "environmentColorWBoost")
                             };
-                        }).Where(c => c is not null).ToArray()!;
+                        }).OfType<ColorScheme>().ToArray();
                     }
                     else
                     {
                         _colorSchemes = Array.Empty<ColorScheme>();
                     }
 
-                    var difficultyBeatmapSets = (JArray)levelInfo["_difficultyBeatmapSets"];
+                    var difficultyBeatmapSets = (levelInfo["_difficultyBeatmapSets"] as JArray ?? throw new JsonSerializationException("Missing _difficultyBeatmapSets array."));
                     foreach (var difficultyBeatmapSetToken in difficultyBeatmapSets)
                     {
-                        var beatmapCharacteristicName = (string)difficultyBeatmapSetToken["_beatmapCharacteristicName"];
+                        var beatmapCharacteristicName = difficultyBeatmapSetToken.Value<string>("_beatmapCharacteristicName") ?? string.Empty;
                         var difficultyBeatmapSet = (JObject)difficultyBeatmapSetToken;
-                        var difficultyBeatmaps = (JArray)difficultyBeatmapSetToken["_difficultyBeatmaps"];
+                        var difficultyBeatmaps = (difficultyBeatmapSetToken["_difficultyBeatmaps"] as JArray ?? throw new JsonSerializationException("Missing _difficultyBeatmaps array."));
 
                         if (difficultyBeatmapSet.TryGetValue("_customData", out var customCharacteristicDataToken))
                         {
@@ -236,10 +236,10 @@ namespace SongCore.Data
                             bool? showRotationNoteSpawnLines = null;
                             string[]? styleTags = null;
 
-                            var difficulty = Utils.ToEnum((string)difficultyBeatmap["_difficulty"], BeatmapDifficulty.Normal);
+                            var difficulty = Utils.ToEnum(difficultyBeatmap.Value<string>("_difficulty") ?? string.Empty, BeatmapDifficulty.Normal);
                             var beatmapColorSchemeIdx = difficultyBeatmap.Value<int?>("_beatmapColorSchemeIdx");
                             var environmentNameIdx = difficultyBeatmap.Value<int?>("_environmentNameIdx");
-                            bool useSongCoreColors = true;
+                            var useSongCoreColors = true;
 
                             if (beatmapColorSchemeIdx != null)
                             {
@@ -264,19 +264,19 @@ namespace SongCore.Data
                                 var customData = (JObject)customDifficultyDataToken;
 
                                 styleTags = levelInfo.TryGetValue("_styleTags", out var styleTagsToken)
-                                    ? styleTagsToken.ToObject<string[]>()
+                                    ? styleTagsToken.ToObject<string[]>() ?? Array.Empty<string>()
                                     : Array.Empty<string>();
                                 requirements = customData.TryGetValue("_requirements", out var requirementsToken)
-                                    ? requirementsToken.ToObject<string[]>()
+                                    ? requirementsToken.ToObject<string[]>() ?? Array.Empty<string>()
                                     : Array.Empty<string>();
                                 suggestions = customData.TryGetValue("_suggestions", out var suggestionsToken)
-                                    ? suggestionsToken.ToObject<string[]>()
+                                    ? suggestionsToken.ToObject<string[]>() ?? Array.Empty<string>()
                                     : Array.Empty<string>();
                                 warnings = customData.TryGetValue("_warnings", out var warningsToken)
-                                    ? warningsToken.ToObject<string[]>()
+                                    ? warningsToken.ToObject<string[]>() ?? Array.Empty<string>()
                                     : Array.Empty<string>();
                                 information = customData.TryGetValue("_information", out var informationToken)
-                                    ? informationToken.ToObject<string[]>()
+                                    ? informationToken.ToObject<string[]>() ?? Array.Empty<string>()
                                     : Array.Empty<string>();
                                 difficultyLabel = customData.Value<string>("_difficultyLabel");
                                 oneSaber = customData.Value<bool?>("_oneSaber");
@@ -342,14 +342,14 @@ namespace SongCore.Data
                             ? contributorsToken
                                 .Select(contributor => new Contributor
                                 {
-                                    _role = contributor.Value<string>("role"),
-                                    _name = contributor.Value<string>("name"),
-                                    _iconPath = contributor.Value<string>("iconPath")
+                                    _role = contributor.Value<string>("role") ?? string.Empty,
+                                    _name = contributor.Value<string>("name") ?? string.Empty,
+                                    _iconPath = contributor.Value<string>("iconPath") ?? string.Empty
                                 })
                                 .ToArray()
                             : Array.Empty<Contributor>();
                         _genreTags = customData.TryGetValue("genreTags", out var genreTagsToken)
-                            ? genreTagsToken.ToObject<string[]>()
+                            ? genreTagsToken.ToObject<string[]>() ?? Array.Empty<string>()
                             : Array.Empty<string>();
                         _customEnvironmentName = customData.Value<string>("customEnvironment");
                         _customEnvironmentHash = customData.Value<string>("customEnvironmentHash");
@@ -361,7 +361,7 @@ namespace SongCore.Data
                             _characteristicDetails = characteristicData
                                     .Select(characteristic => new CharacteristicDetails
                                     {
-                                        _beatmapCharacteristicName = characteristic.Value<string>("characteristic"),
+                                        _beatmapCharacteristicName = characteristic.Value<string>("characteristic") ?? string.Empty,
                                         _characteristicLabel = characteristic.Value<string>("label"),
                                         _characteristicIconFilePath = characteristic.Value<string>("iconPath")
                                     })
@@ -375,7 +375,7 @@ namespace SongCore.Data
                     }
 
                     _environmentNames = levelInfo.TryGetValue("environmentNames", out var environmentNamesToken)
-                        ? environmentNamesToken.ToObject<string[]>()
+                        ? environmentNamesToken.ToObject<string[]>() ?? Array.Empty<string>()
                         : Array.Empty<string>();
 
                     if (levelInfo.TryGetValue("colorSchemes", out var colorSchemesToken))
@@ -404,18 +404,18 @@ namespace SongCore.Data
                                 environmentColorW = GetMapColorFromJObject(colorScheme, "environmentColorW"),
                                 environmentColorWBoost = GetMapColorFromJObject(colorScheme, "environmentColorWBoost")
                             };
-                        }).Where(c => c is not null).ToArray()!;
+                        }).OfType<ColorScheme>().ToArray();
                     }
                     else
                     {
                         _colorSchemes = Array.Empty<ColorScheme>();
                     }
 
-                    var difficultyBeatmaps = (JArray)levelInfo["difficultyBeatmaps"];
+                    var difficultyBeatmaps = (levelInfo["difficultyBeatmaps"] as JArray ?? throw new JsonSerializationException("Missing difficultyBeatmaps array."));
                     foreach (var difficultyBeatmapToken in difficultyBeatmaps)
                     {
                         var difficultyBeatmap = (JObject)difficultyBeatmapToken;
-                        var beatmapCharacteristicName = (string)difficultyBeatmap["characteristic"];
+                        var beatmapCharacteristicName = difficultyBeatmap.Value<string>("characteristic") ?? string.Empty;
 
                         string[]? requirements = null;
                         string[]? suggestions = null;
@@ -435,10 +435,10 @@ namespace SongCore.Data
                         bool? showRotationNoteSpawnLines = null;
                         string[]? styleTags = null;
 
-                        var difficulty = Utils.ToEnum((string)difficultyBeatmap["difficulty"], BeatmapDifficulty.Normal);
+                        var difficulty = Utils.ToEnum(difficultyBeatmap.Value<string>("difficulty") ?? string.Empty, BeatmapDifficulty.Normal);
                         var beatmapColorSchemeIdx = difficultyBeatmap.Value<int?>("beatmapColorSchemeIdx");
                         var environmentNameIdx = difficultyBeatmap.Value<int?>("environmentNameIdx");
-                        bool useSongCoreColors = true;
+                        var useSongCoreColors = true;
 
                         if (beatmapColorSchemeIdx != null)
                         {
@@ -463,19 +463,19 @@ namespace SongCore.Data
                             var customData = (JObject)customDifficultyDataToken;
 
                             styleTags = levelInfo.TryGetValue("styleTags", out var styleTagsToken)
-                                ? styleTagsToken.ToObject<string[]>()
+                                ? styleTagsToken.ToObject<string[]>() ?? Array.Empty<string>()
                                 : Array.Empty<string>();
                             requirements = customData.TryGetValue("requirements", out var requirementsToken)
-                                ? requirementsToken.ToObject<string[]>()
+                                ? requirementsToken.ToObject<string[]>() ?? Array.Empty<string>()
                                 : Array.Empty<string>();
                             suggestions = customData.TryGetValue("suggestions", out var suggestionsToken)
-                                ? suggestionsToken.ToObject<string[]>()
+                                ? suggestionsToken.ToObject<string[]>() ?? Array.Empty<string>()
                                 : Array.Empty<string>();
                             warnings = customData.TryGetValue("warnings", out var warningsToken)
-                                ? warningsToken.ToObject<string[]>()
+                                ? warningsToken.ToObject<string[]>() ?? Array.Empty<string>()
                                 : Array.Empty<string>();
                             information = customData.TryGetValue("information", out var informationToken)
-                                ? informationToken.ToObject<string[]>()
+                                ? informationToken.ToObject<string[]>() ?? Array.Empty<string>()
                                 : Array.Empty<string>();
                             difficultyLabel = customData.Value<string>("difficultyLabel");
                             oneSaber = customData.Value<bool?>("oneSaber");

@@ -11,20 +11,7 @@ namespace SongCore.Utilities
     {
         public static bool IsModInstalled(string modName)
         {
-            return IPA.Loader.PluginManager.Plugins.Any(mod => mod.Name == modName) || IPA.Loader.PluginManager.EnabledPlugins.Any(mod => mod.Id == modName);
-        }
-
-        [Obsolete( "Use the overload that takes a SongData.", true)]
-        public static bool DiffHasColors(ExtraSongData.DifficultyData songData)
-        {
-            return songData._colorLeft != null || songData._colorRight != null || songData._envColorLeft != null || songData._envColorRight != null
-                || songData._envColorLeftBoost != null || songData._envColorRightBoost != null || songData._obstacleColor != null;
-        }
-
-        [Obsolete( "Use the overload that takes a SongData.", true)]
-        public static Color ColorFromMapColor(ExtraSongData.MapColor mapColor)
-        {
-            return new Color(mapColor.r, mapColor.g, mapColor.b, mapColor.a);
+            return IPA.Loader.PluginManager.EnabledPlugins.Any(mod => mod.Id == modName || mod.Name == modName);
         }
 
         public static bool DiffHasColors(SongData.DifficultyData songData)
@@ -81,7 +68,7 @@ namespace SongCore.Utilities
         public static byte[] GetResource(Assembly asm, string resourceName)
         {
             using var stream = asm.GetManifestResourceStream(resourceName)!;
-            byte[] data = new byte[stream.Length];
+            var data = new byte[stream.Length];
             stream.Read(data, 0, (int) stream.Length);
             return data;
         }
@@ -103,8 +90,18 @@ namespace SongCore.Utilities
                 return null;
             }
 
-            Texture2D tex2D = new Texture2D(2, 2);
-            return tex2D.LoadImage(file) ? tex2D : null;
+            var tex2D = new Texture2D(2, 2);
+            bool loaded = false;
+            try
+            {
+                loaded = tex2D.LoadImage(file);
+                return loaded ? tex2D : null;
+            }
+            finally
+            {
+                if (!loaded)
+                    UnityEngine.Object.Destroy(tex2D);
+            }
         }
 
         public static void PrintHierarchy(Transform transform, string spacing = "|-> ")

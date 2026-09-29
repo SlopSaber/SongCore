@@ -45,13 +45,6 @@ namespace SongCore.UI
             }
         }
 
-        [UIValue("platforms")]
-        public bool Platforms
-        {
-            get => _config.CustomSongPlatforms;
-            set => _config.CustomSongPlatforms = value;
-        }
-
         [UIValue("diffLabels")]
         public bool DiffLabels
         {

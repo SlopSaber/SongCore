@@ -1,4 +1,5 @@
-using SongCore.Patches;
+using SongCore.Hooks;
+using SongCore.Hooks.BeatmapLevelCache;
 using SongCore.UI;
 using Zenject;
 
@@ -13,8 +14,22 @@ namespace SongCore.Installers
             Container.BindInterfacesAndSelfTo<ColorsUI>().AsSingle();
             Container.Bind<ProgressBar>().FromNewComponentOnNewGameObject().AsSingle();
             Container.BindInterfacesAndSelfTo<RequirementsUI>().AsSingle();
-            Container.BindInterfacesTo<SongDataMenuPatches>().AsSingle();
-            Container.BindInterfacesTo<InternalRestartPatch>().AsSingle();
+            Container.Bind<BeatmapLevelCache>().AsSingle();
+            Container.BindInterfacesTo<BeatmapVersionDetectionHook>().AsSingle();
+            Container.BindInterfacesTo<BeatmapJsonCacheHooks>().AsSingle();
+            Container.BindInterfacesTo<BeatmapDataCacheHooks>().AsSingle();
+            Container.BindInterfacesTo<SongDataMenuHooks>().AsSingle();
+            Container.BindInterfacesTo<InternalRestartHook>().AsSingle();
+            Container.BindInterfacesTo<BindBeatmapLevelHook>().AsSingle();
+            Container.BindInterfacesTo<YeetLegacyBpmEventsHook>().AsSingle();
+            Container.BindInterfacesTo<StandardLevelDetailViewControllerHook>().AsSingle();
+            Container.BindInterfacesTo<RemoveDownloadIconHook>().AsSingle();
+            Container.BindInterfacesTo<RefreshAfterEditorHook>().AsSingle();
+            Container.BindInterfacesTo<LoadingHooks>().AsSingle();
+            Container.BindInterfacesTo<LevelListTableCellDataHook>().AsSingle();
+            Container.BindInterfacesTo<EscapeURLHook>().AsSingle();
+            Container.BindInterfacesTo<ComputeMaxMultipliedScoreSafelyHook>().AsSingle();
+            Container.BindInterfacesTo<IOBlacklistHook>().AsSingle();
         }
     }
 }

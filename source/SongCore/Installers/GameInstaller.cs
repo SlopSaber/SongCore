@@ -1,4 +1,4 @@
-using SongCore.Patches;
+using SongCore.Hooks;
 using Zenject;
 
 namespace SongCore.Installers
@@ -7,8 +7,9 @@ namespace SongCore.Installers
     {
         public override void InstallBindings()
         {
-            Container.BindInterfacesTo<SongDataGamePatches>().AsSingle();
-            Container.BindInterfacesTo<DisableSubmissionPatches>().AsSingle();
+            Container.BindInterfacesTo<SongDataGameHooks>().AsSingle();
+            Container.BindInterfacesTo<DisableSubmissionHooks>().AsSingle();
+            Container.BindInterfacesTo<AllowNegativeVariableNoteJumpSpeedHook>().AsSingle();
         }
     }
 }
