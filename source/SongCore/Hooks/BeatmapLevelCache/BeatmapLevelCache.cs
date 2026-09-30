@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Threading;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using IPA.Utilities;
 using ModestTree;
@@ -12,6 +13,10 @@ namespace SongCore.Hooks.BeatmapLevelCache
 
         private readonly string?[] _jsonData = new string?[BeatmapDataTypeCount];
         private readonly Task<string?>?[] _jsonTasks = new Task<string?>?[BeatmapDataTypeCount];
+        // Keep immutable JSON for two recent difficulties of this level. Parsed/converted
+        // beatmaps remain request-specific and are never shared by this cache.
+        private const long MaxRecentJsonCharacters = 32L * 1024 * 1024;
+        private readonly List<DifficultyJson> _recentJson = new List<DifficultyJson>(2);
 
         public CancellationTokenSource? CancellationTokenSource { get; private set; }
         public BeatmapLevel? BeatmapLevel { get; private set; }
@@ -65,6 +70,7 @@ namespace SongCore.Hooks.BeatmapLevelCache
 
         public void InvalidateLevel()
         {
+            _recentJson.Clear();
             BeatmapLevelData = null;
             _jsonData[0] = null;
             _jsonTasks[0] = null;
@@ -92,7 +98,8 @@ namespace SongCore.Hooks.BeatmapLevelCache
             try
             {
                 data = original();
-                CacheJsonData(beatmapDataType, data);
+                if (CanCache(beatmapLevelData, beatmapKey, beatmapDataType))
+                    CacheJsonData(beatmapKey, beatmapDataType, data);
 
                 return data;
             }
@@ -110,8 +117,9 @@ namespace SongCore.Hooks.BeatmapLevelCache
             }
 
             var idx = (int)beatmapDataType;
+            bool cacheable = CanCache(beatmapLevelData, beatmapKey, beatmapDataType);
 
-            var cachedTask = _jsonTasks[idx];
+            var cachedTask = cacheable ? _jsonTasks[idx] : null;
             if (cachedTask != null)
             {
                 Plugin.Log.Debug($"Returning {beatmapDataType} JSON task from cache");
@@ -124,12 +132,12 @@ namespace SongCore.Hooks.BeatmapLevelCache
             try
             {
                 originalTask = original();
-                _jsonTasks[idx] = originalTask;
+                if (cacheable) _jsonTasks[idx] = originalTask;
                 data = await originalTask;
 
-                if (originalTask == _jsonTasks[idx])
+                if (cacheable && originalTask == _jsonTasks[idx] && CanCache(beatmapLevelData, beatmapKey, beatmapDataType))
                 {
-                    CacheJsonData(beatmapDataType, data);
+                    CacheJsonData(beatmapKey, beatmapDataType, data);
                 }
 
                 return data;
@@ -138,7 +146,7 @@ namespace SongCore.Hooks.BeatmapLevelCache
             {
                 IOBlacklistHook.AllowIO.Value = false;
 
-                if (originalTask != null && originalTask == _jsonTasks[idx])
+                if (cacheable && originalTask != null && originalTask == _jsonTasks[idx])
                 {
                     _jsonTasks[idx] = null;
                 }
@@ -149,7 +157,7 @@ namespace SongCore.Hooks.BeatmapLevelCache
         {
             Assert.That(UnityGame.OnMainThread, "This method must be called on the main thread.");
 
-            if (LevelMatches(beatmapLevelData) && (beatmapDataType == BeatmapDataType.Audio || DifficultyMatches(beatmapKey)))
+            if (CanCache(beatmapLevelData, beatmapKey, beatmapDataType))
             {
                 var cachedData = _jsonData[(int)beatmapDataType];
                 if (cachedData != null)
@@ -158,16 +166,62 @@ namespace SongCore.Hooks.BeatmapLevelCache
                     value = cachedData;
                     return true;
                 }
+                if (beatmapDataType != BeatmapDataType.Audio)
+                {
+                    for (int i = 0; i < _recentJson.Count; i++)
+                    {
+                        DifficultyJson entry = _recentJson[i];
+                        if (entry.Key != beatmapKey || entry.Data[(int)beatmapDataType] == null) continue;
+                        value = _jsonData[(int)beatmapDataType] = entry.Data[(int)beatmapDataType];
+                        _recentJson.RemoveAt(i);
+                        _recentJson.Add(entry);
+                        Plugin.Log.Debug($"Returning recent-difficulty {beatmapDataType} JSON data from cache");
+                        return true;
+                    }
+                }
             }
 
             value = null;
             return false;
         }
 
-        private void CacheJsonData(BeatmapDataType beatmapDataType, string? data)
+        private bool CanCache(IBeatmapLevelData beatmapLevelData, BeatmapKey beatmapKey, BeatmapDataType type) =>
+            LevelMatches(beatmapLevelData) && (type == BeatmapDataType.Audio || DifficultyMatches(beatmapKey));
+
+        private void CacheJsonData(BeatmapKey key, BeatmapDataType beatmapDataType, string? data)
         {
             Plugin.Log.Debug($"Storing {beatmapDataType} JSON data in cache");
             _jsonData[(int)beatmapDataType] = data;
+            if (data == null || beatmapDataType == BeatmapDataType.Audio) return;
+
+            DifficultyJson? entry = null;
+            for (int i = 0; i < _recentJson.Count; i++)
+            {
+                if (_recentJson[i].Key != key) continue;
+                entry = _recentJson[i];
+                _recentJson.RemoveAt(i);
+                break;
+            }
+            entry ??= new DifficultyJson(key);
+            entry.Data[(int)beatmapDataType] = data;
+            _recentJson.Add(entry);
+
+            long characters = 0;
+            foreach (DifficultyJson recent in _recentJson)
+                foreach (string? json in recent.Data) characters += json?.Length ?? 0;
+            while (_recentJson.Count > 2 || characters > MaxRecentJsonCharacters)
+            {
+                DifficultyJson oldest = _recentJson[0];
+                foreach (string? json in oldest.Data) characters -= json?.Length ?? 0;
+                _recentJson.RemoveAt(0);
+            }
+        }
+
+        private sealed class DifficultyJson
+        {
+            public readonly BeatmapKey Key;
+            public readonly string?[] Data = new string?[BeatmapDataTypeCount];
+            public DifficultyJson(BeatmapKey key) => Key = key;
         }
     }
 }
