@@ -121,7 +121,8 @@ namespace SongCore.Hooks.BeatmapLevelCache
 
             foreach (var handler in originalDelegate.GetInvocationList().Cast<Action<TSender, TArgs?>>())
             {
-                if (Directory.GetParent(handler.Method.DeclaringType!.Assembly.Location)!.Name == "Managed")
+                if (handler.Method.DeclaringType!.Assembly == typeof(LevelCollectionTableView).Assembly ||
+                    Directory.GetParent(handler.Method.DeclaringType.Assembly.Location)!.Name == "Managed")
                 {
                     baseHandlers.Add(handler);
                 }
