@@ -1089,6 +1089,9 @@ namespace SongCore
             if (!IsCurrentLoad(cancellationToken))
                 return;
             var currentSongPaths = await Task.Run(() => foundSongPaths.Keys.ToHashSet(), cancellationToken);
+            await UnityGame.SwitchToMainThreadAsync();
+            if (!IsCurrentLoad(cancellationToken))
+                return;
             await Task.WhenAll(Hashing.SaveCachedSongHashesAsync(currentSongPaths), Hashing.SaveCachedAudioDataAsync(currentSongPaths), Collections.SaveCachedSongDataAsync());
         }
 

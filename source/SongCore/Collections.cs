@@ -136,11 +136,16 @@ namespace SongCore
 
         internal static async Task SaveCachedSongDataAsync()
         {
-            Plugin.Log.Info($"Saving cached song data for {CustomSongsData.Count} songs.");
-
             try
             {
-                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(CustomSongsData, DataPath));
+                await UnityGame.SwitchToMainThreadAsync();
+                var songs = CustomSongsData.ToArray();
+                var snapshot = new Dictionary<string, object>(songs.Length, StringComparer.Ordinal);
+                foreach (var song in songs)
+                    snapshot.Add(song.Key, SongDataCacheSnapshot.Capture(song.Value));
+                var path = DataPath;
+                Plugin.Log.Info($"Saving cached song data for {snapshot.Count} songs.");
+                await Task.Run(() => Utilities.CacheFile.Write(snapshot, path));
             }
             catch (Exception ex)
             {

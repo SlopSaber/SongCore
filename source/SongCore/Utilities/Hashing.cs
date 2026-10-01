@@ -41,22 +41,28 @@ namespace SongCore.Utilities
             }
         }
 
-        internal static async Task SaveCachedSongHashesAsync(ICollection<string> currentSongPaths)
+        internal static async Task SaveCachedSongHashesAsync(HashSet<string> currentSongPaths)
         {
-            foreach (var levelPath in cachedSongHashData.Keys)
-            {
-                var absolutePath = GetAbsolutePath(levelPath);
-                if (!currentSongPaths.Contains(absolutePath) || (absolutePath == levelPath && IsInInstallPath(levelPath)))
-                {
-                    cachedSongHashData.TryRemove(levelPath, out _);
-                }
-            }
-
-            Plugin.Log.Info($"Saving cached hashes for {cachedSongHashData.Count} songs.");
-
+            var data = cachedSongHashData;
+            var installPath = IPA.Utilities.UnityGame.InstallPath;
+            var path = cachedHashDataPath;
             try
             {
-                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(cachedSongHashData, cachedHashDataPath));
+                await Task.Run(() =>
+                {
+                    var snapshot = new Dictionary<string, SongHashData>(StringComparer.Ordinal);
+                    foreach (var entry in data.ToArray())
+                    {
+                        if (!KeepCachePath(entry.Key, currentSongPaths, installPath))
+                        {
+                            ((ICollection<KeyValuePair<string, SongHashData>>)data).Remove(entry);
+                            continue;
+                        }
+                        snapshot.Add(entry.Key, new SongHashData(entry.Value.directoryHash, entry.Value.songHash));
+                    }
+                    Plugin.Log.Info($"Saving cached hashes for {snapshot.Count} songs.");
+                    CacheFile.Write(snapshot, path);
+                });
             }
             catch (Exception ex)
             {
@@ -85,28 +91,43 @@ namespace SongCore.Utilities
             }
         }
 
-        internal static async Task SaveCachedAudioDataAsync(ICollection<string> currentSongPaths)
+        internal static async Task SaveCachedAudioDataAsync(HashSet<string> currentSongPaths)
         {
-            foreach (var levelPath in cachedAudioData.Keys)
-            {
-                var absolutePath = GetAbsolutePath(levelPath);
-                if (!currentSongPaths.Contains(absolutePath) || (absolutePath == levelPath && IsInInstallPath(levelPath)))
-                {
-                    cachedAudioData.TryRemove(levelPath, out _);
-                }
-            }
-
-            Plugin.Log.Info($"Saving cached durations for {cachedAudioData.Count} songs.");
-
+            var data = cachedAudioData;
+            var installPath = IPA.Utilities.UnityGame.InstallPath;
+            var path = cachedAudioDataPath;
             try
             {
-                await Task.Run(() => JsonFileHandler.WriteCompactWithoutDefault(cachedAudioData, cachedAudioDataPath));
+                await Task.Run(() =>
+                {
+                    var snapshot = new Dictionary<string, AudioCacheData>(StringComparer.Ordinal);
+                    foreach (var entry in data.ToArray())
+                    {
+                        if (!KeepCachePath(entry.Key, currentSongPaths, installPath))
+                        {
+                            ((ICollection<KeyValuePair<string, AudioCacheData>>)data).Remove(entry);
+                            continue;
+                        }
+                        snapshot.Add(entry.Key, new AudioCacheData(entry.Value.id, entry.Value.duration));
+                    }
+                    Plugin.Log.Info($"Saving cached durations for {snapshot.Count} songs.");
+                    CacheFile.Write(snapshot, path);
+                });
             }
             catch (Exception ex)
             {
                 Plugin.Log.Error($"Error saving cached song durations: {ex.Message}");
                 Plugin.Log.Error(ex);
             }
+        }
+
+        private static bool KeepCachePath(string path, HashSet<string> currentPaths, string installPath)
+        {
+            var absolutePath = GetAbsolutePath(path, installPath);
+            if (!installPath.EndsWith(Path.DirectorySeparatorChar))
+                installPath += Path.DirectorySeparatorChar;
+            return currentPaths.Contains(absolutePath) &&
+                   !(absolutePath == path && path.StartsWith(installPath, StringComparison.Ordinal));
         }
 
         private static long GetDirectoryHash(string directory)
