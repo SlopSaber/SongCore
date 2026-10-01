@@ -23,14 +23,11 @@ namespace SongCore.Utilities
 
         internal static async Task LoadCachedSongHashesAsync()
         {
-            if (!File.Exists(cachedHashDataPath))
-            {
-                return;
-            }
-
+            var path = cachedHashDataPath;
             try
             {
-                var songHashData = await Task.Run(() => JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, SongHashData>>(cachedHashDataPath));
+                var songHashData = await Task.Run(() => File.Exists(path)
+                    ? JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, SongHashData>>(path) : null);
                 if (songHashData != null)
                 {
                     cachedSongHashData = songHashData;
@@ -70,14 +67,11 @@ namespace SongCore.Utilities
 
         internal static async Task LoadCachedAudioDataAsync()
         {
-            if (!File.Exists(cachedAudioDataPath))
-            {
-                return;
-            }
-
+            var path = cachedAudioDataPath;
             try
             {
-                var audioData = await Task.Run(() => JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, AudioCacheData>>(cachedAudioDataPath));
+                var audioData = await Task.Run(() => File.Exists(path)
+                    ? JsonFileHandler.ReadFromFile<ConcurrentDictionary<string, AudioCacheData>>(path) : null);
                 if (audioData != null)
                 {
                     cachedAudioData = audioData;
@@ -223,12 +217,14 @@ namespace SongCore.Utilities
             }
         }
 
-        public static string GetAbsolutePath(string path)
+        public static string GetAbsolutePath(string path) => GetAbsolutePath(path, IPA.Utilities.UnityGame.InstallPath);
+
+        internal static string GetAbsolutePath(string path, string installPath)
         {
             path = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
             if (path.StartsWith("." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             {
-                return Path.Combine(IPA.Utilities.UnityGame.InstallPath, path.Substring(2));
+                return Path.Combine(installPath, path.Substring(2));
             }
 
             return path;

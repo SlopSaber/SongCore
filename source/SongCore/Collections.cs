@@ -69,7 +69,6 @@ namespace SongCore
 
             if (beatmapKey.levelId.StartsWith(CustomLevelLoader.kCustomLevelPrefixId, StringComparison.Ordinal))
             {
-                // TODO: Will be null in the editor due to levelID being "custom_level_CustomLevel".
                 songData = GetCustomLevelSongData(beatmapKey.levelId);
             }
 
@@ -82,22 +81,23 @@ namespace SongCore
 
         internal static async Task LoadCachedSongDataAsync()
         {
-            if (!File.Exists(DataPath))
-            {
-                return;
-            }
-
+            var path = DataPath;
             try
             {
-                var songData = await Task.Run(() =>
+                var loaded = await Task.Run(() =>
                 {
-                    using var reader = File.OpenText(DataPath);
+                    if (!File.Exists(path))
+                        return (exists: false, data: (ConcurrentDictionary<string, SongData>?)null);
+                    using var reader = File.OpenText(path);
                     using var json = new JsonTextReader(reader);
                     // Keep cache parsing independent of process-wide serializer overrides.
                     var serializer = JsonSerializer.Create(JsonSettings.readableWithDefault);
                     serializer.CheckAdditionalContent = true;
-                    return serializer.Deserialize<ConcurrentDictionary<string, SongData>>(json);
+                    return (exists: true, data: serializer.Deserialize<ConcurrentDictionary<string, SongData>>(json));
                 });
+                if (!loaded.exists)
+                    return;
+                var songData = loaded.data;
                 if (songData != null)
                 {
                     CustomSongsData = songData;

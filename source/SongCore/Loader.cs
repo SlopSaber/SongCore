@@ -118,8 +118,6 @@ namespace SongCore
             _gameScenesManager.transitionDidFinishEvent += HandleSceneTransitionDidFinish;
             // BSML might fail to find the resource if done in a patched method.
             _bsmlSettings.AddSettingsMenu(nameof(SongCore), "SongCore.UI.settings.bsml", _settingsController);
-
-            SongsLoadedEvent += HandleSongsLoaded;
         }
 
         public void Dispose()
@@ -129,8 +127,6 @@ namespace SongCore
             SceneManager.activeSceneChanged -= HandleActiveSceneChanged;
 
             _gameScenesManager.transitionDidStartEvent -= HandleSceneTransitionDidStart;
-
-            SongsLoadedEvent -= HandleSongsLoaded;
         }
 
         /// <summary>
@@ -176,7 +172,7 @@ namespace SongCore
             _gameScenesManager.transitionDidStartEvent += HandleSceneTransitionDidStart;
         }
 
-        private void HandleSongsLoaded(Loader loader, ConcurrentDictionary<string, BeatmapLevel> customLevels)
+        private static void ReportDuplicateSongs()
         {
             foreach (var (hash, levels) in Collections.HashLevelDictionary)
             {
@@ -326,12 +322,15 @@ namespace SongCore
 
             #endregion
 
-            var foundSongPaths = fullRefresh
-                ? new ConcurrentDictionary<string, bool>()
-                : new ConcurrentDictionary<string, bool>(Hashing.cachedSongHashData.Keys.ToDictionary(Hashing.GetAbsolutePath, _ => false));
+            var cachedSongPaths = fullRefresh ? null : Hashing.cachedSongHashData.Keys;
+            var installPath = UnityGame.InstallPath;
+            ConcurrentDictionary<string, bool> foundSongPaths = null!;
 
             var job = async () =>
             {
+                foundSongPaths = fullRefresh
+                    ? new ConcurrentDictionary<string, bool>()
+                    : new ConcurrentDictionary<string, bool>(cachedSongPaths!.ToDictionary(path => Hashing.GetAbsolutePath(path, installPath), _ => false));
                 #region AddCustomBeatmaps
 
                 try
@@ -704,6 +703,7 @@ namespace SongCore
                 LoadingProgress = 1;
 
                 _loadingTask = null;
+                await Task.Run(ReportDuplicateSongs);
                 await UnityMainThreadTaskScheduler.Factory.StartNew(() => SongsLoadedEvent?.Invoke(this, CustomLevels));
 
                 var currentSongPaths = foundSongPaths.Keys.ToHashSet();
