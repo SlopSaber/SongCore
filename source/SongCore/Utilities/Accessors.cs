@@ -24,6 +24,18 @@ namespace SongCore.Utilities
         public static readonly FieldAccessor<BeatmapLevelsRepository, BeatmapLevelPack[]>.Accessor BeatmapLevelPacksAccessor =
             FieldAccessor<BeatmapLevelsRepository, BeatmapLevelPack[]>.GetAccessor(nameof(BeatmapLevelsRepository._beatmapLevelPacks));
 
+        public static readonly FieldAccessor<BeatmapLevelsRepository, Dictionary<string, BeatmapLevelPack>>.Accessor LevelPacksByIdAccessor =
+            FieldAccessor<BeatmapLevelsRepository, Dictionary<string, BeatmapLevelPack>>.GetAccessor(nameof(BeatmapLevelsRepository._idToBeatmapLevelPack));
+
+        public static readonly FieldAccessor<BeatmapLevelsRepository, Dictionary<string, BeatmapLevel>>.Accessor LevelsByIdAccessor =
+            FieldAccessor<BeatmapLevelsRepository, Dictionary<string, BeatmapLevel>>.GetAccessor(nameof(BeatmapLevelsRepository._idToBeatmapLevel));
+
+        public static readonly FieldAccessor<BeatmapLevelsRepository, Dictionary<string, string>>.Accessor PackIdsByLevelIdAccessor =
+            FieldAccessor<BeatmapLevelsRepository, Dictionary<string, string>>.GetAccessor(nameof(BeatmapLevelsRepository._beatmapLevelIdToBeatmapLevelPackId));
+
+        public static readonly FieldAccessor<CustomLevelLoader, Dictionary<string, CustomLevelLoader.LoadedSaveData>>.Accessor LoadedSaveDataAccessor =
+            FieldAccessor<CustomLevelLoader, Dictionary<string, CustomLevelLoader.LoadedSaveData>>.GetAccessor(nameof(CustomLevelLoader._loadedBeatmapSaveData));
+
         public static readonly FieldAccessor<LevelCollectionTableView, Action<LevelCollectionTableView, BeatmapLevel>>.Accessor TableViewDidSelectLevelEventAccessor =
             FieldAccessor<LevelCollectionTableView, Action<LevelCollectionTableView, BeatmapLevel>>.GetAccessor(nameof(LevelCollectionTableView.didSelectLevelEvent));
 

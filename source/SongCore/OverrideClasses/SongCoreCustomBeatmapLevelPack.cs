@@ -1,3 +1,6 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using SongCore.Utilities;
 using UnityEngine;
@@ -25,6 +28,82 @@ namespace SongCore.OverrideClasses
         {
             var that = (BeatmapLevelPack)this;
             Accessors.AllBeatmapLevelsAccessor(ref that) = beatmapLevels.Concat(_additionalBeatmapLevels).ToList();
+        }
+
+        internal UpdateSnapshot CaptureUpdate(BeatmapLevel[] ownedLevels)
+        {
+            return new UpdateSnapshot(this, ownedLevels);
+        }
+
+        // The caller validates the entire refresh before publishing any pack or repository fields.
+        internal void Publish(PreparedUpdate update)
+        {
+            if (!ReferenceEquals(update.Pack, this))
+                throw new ArgumentException("Prepared levels belong to another pack.", nameof(update));
+
+            var that = (BeatmapLevelPack)this;
+            Accessors.AllBeatmapLevelsAccessor(ref that) = update.Levels;
+        }
+
+        internal sealed class UpdateSnapshot
+        {
+            private readonly BeatmapLevel[] _levels;
+            private readonly BeatmapLevel[] _additionalLevels;
+            private readonly List<BeatmapLevel> _originalAdditionalLevels;
+            private readonly List<BeatmapLevel> _originalAllLevels;
+            private readonly IEnumerator _additionalLevelsValidator;
+            private readonly IEnumerator _allLevelsValidator;
+
+            internal SongCoreCustomBeatmapLevelPack Pack { get; }
+
+            internal UpdateSnapshot(SongCoreCustomBeatmapLevelPack pack, BeatmapLevel[] ownedLevels)
+            {
+                Pack = pack;
+                _levels = ownedLevels;
+                _originalAdditionalLevels = pack._additionalBeatmapLevels;
+                _originalAllLevels = pack.AllBeatmapLevels();
+                _additionalLevelsValidator = _originalAdditionalLevels.GetEnumerator();
+                _allLevelsValidator = _originalAllLevels.GetEnumerator();
+                _additionalLevels = _originalAdditionalLevels.ToArray();
+            }
+
+            internal bool IsCurrent()
+            {
+                if (!ReferenceEquals(Pack._additionalBeatmapLevels, _originalAdditionalLevels) ||
+                    !ReferenceEquals(Pack.AllBeatmapLevels(), _originalAllLevels))
+                    return false;
+
+                try
+                {
+                    _additionalLevelsValidator.Reset();
+                    _allLevelsValidator.Reset();
+                    return true;
+                }
+                catch (InvalidOperationException)
+                {
+                    return false;
+                }
+            }
+
+            internal PreparedUpdate Prepare()
+            {
+                var levels = new List<BeatmapLevel>(_levels.Length + _additionalLevels.Length);
+                levels.AddRange(_levels);
+                levels.AddRange(_additionalLevels);
+                return new PreparedUpdate(Pack, levels);
+            }
+        }
+
+        internal sealed class PreparedUpdate
+        {
+            internal SongCoreCustomBeatmapLevelPack Pack { get; }
+            internal List<BeatmapLevel> Levels { get; }
+
+            internal PreparedUpdate(SongCoreCustomBeatmapLevelPack pack, List<BeatmapLevel> levels)
+            {
+                Pack = pack;
+                Levels = levels;
+            }
         }
     }
 }

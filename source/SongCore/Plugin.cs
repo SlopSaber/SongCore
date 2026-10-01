@@ -1,4 +1,7 @@
+using System;
 using System.IO;
+using System.Reflection;
+using System.Threading.Tasks;
 using IPA;
 using IPA.Config;
 using IPA.Config.Stores;
@@ -15,8 +18,10 @@ namespace SongCore
     public class Plugin
     {
         private readonly PluginMetadata _metadata;
+        private bool _folderStopping;
 
         internal static Logger Log { get; private set; } = null!;
+        internal static Task FolderInitializationTask { get; private set; } = Task.CompletedTask;
 
         [Init]
         public Plugin(Logger logger, PluginMetadata metadata, Zenjector zenjector)
@@ -45,19 +50,42 @@ namespace SongCore
             Collections.RegisterCustomCharacteristic(BasicUI.ExtraDiffsIcon!, "Lawless", "Lawless - Anything Goes", "Lawless", "Lawless", false, false, 101);
 
             var foldersXmlFilePath = Path.Combine(UnityGame.UserDataPath, nameof(SongCore), "folders.xml");
-            if (!File.Exists(foldersXmlFilePath))
-            {
-                using var foldersXmlResourceStream = _metadata.Assembly.GetManifestResourceStream("SongCore.Data.folders.xml");
-                using var fileStream = File.OpenWrite(foldersXmlFilePath);
-                foldersXmlResourceStream!.CopyTo(fileStream);
-            }
+            FolderInitializationTask = InitializeFoldersAsync(foldersXmlFilePath, _metadata.Assembly);
+        }
 
-            Loader.SeparateSongFolders.InsertRange(0, Data.SeparateSongFolder.ReadSeparateFoldersFromFile(foldersXmlFilePath));
+        private async Task InitializeFoldersAsync(string filePath, Assembly assembly)
+        {
+            try
+            {
+                var prepared = await Task.Run(() =>
+                {
+                    if (!File.Exists(filePath))
+                    {
+                        using var resourceStream = assembly.GetManifestResourceStream("SongCore.Data.folders.xml");
+                        using var fileStream = File.OpenWrite(filePath);
+                        resourceStream!.CopyTo(fileStream);
+                    }
+
+                    return Data.SeparateSongFolder.PrepareSeparateFoldersFromFile(filePath);
+                });
+                await UnityGame.SwitchToMainThreadAsync();
+                if (_folderStopping)
+                    return;
+
+                Loader.SeparateSongFolders.InsertRange(0, Data.SeparateSongFolder.CreateSeparateFolders(prepared));
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Error initializing separate song folders:");
+                Log.Error(ex);
+            }
         }
 
         [OnExit]
         public void OnApplicationExit()
         {
+            _folderStopping = true;
+            Loader.StopCatalog();
             Collections.StopCachedSongDataLoad();
         }
     }

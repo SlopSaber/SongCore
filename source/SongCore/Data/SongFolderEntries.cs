@@ -41,7 +41,13 @@ namespace SongCore.Data
         public SeparateSongFolder? CacheFolder { get; private set; }
 
         public SeparateSongFolder(SongFolderEntry folderEntry, SeparateSongFolder? cacheFolder = null)
+            : this(PrepareSongFolder(folderEntry), cacheFolder)
         {
+        }
+
+        internal SeparateSongFolder(PreparedSongFolder prepared, SeparateSongFolder? cacheFolder = null)
+        {
+            var folderEntry = prepared.Entry;
             SongFolderEntry = folderEntry;
             CacheFolder = cacheFolder;
 
@@ -49,11 +55,15 @@ namespace SongCore.Data
             {
                 var image = UI.BasicUI.FolderIcon!;
 
-                if (!string.IsNullOrEmpty(folderEntry.ImagePath))
+                if (prepared.ImageReadFailed)
+                {
+                    Plugin.Log.Info($"Failed to load image for separate folder \"{folderEntry.Name}\"");
+                }
+                else if (prepared.ImageData != null)
                 {
                     try
                     {
-                        var packImage = Utils.LoadSpriteFromFile(folderEntry.ImagePath);
+                        var packImage = Utils.LoadSpriteRaw(prepared.ImageData);
                         if (packImage != null)
                         {
                             image = packImage;
@@ -80,21 +90,25 @@ namespace SongCore.Data
 
         public static List<SeparateSongFolder> ReadSeparateFoldersFromFile(string filePath)
         {
-            var result = new List<SeparateSongFolder>();
+            return CreateSeparateFolders(PrepareSeparateFoldersFromFile(filePath));
+        }
+
+        internal static PreparedSongFolders PrepareSeparateFoldersFromFile(string filePath)
+        {
+            var result = new PreparedSongFolders();
             try
             {
                 var file = XDocument.Load(filePath);
-                foreach (var item in file.Root.Elements())
+                foreach (var item in file.Root!.Elements())
                 {
-                    //           Console.WriteLine("Element Name: " + item.Name);
-                    var name = item.Element("Name").Value;
+                    var name = item.Element("Name")!.Value;
                     if (name == "Example")
                     {
                         continue;
                     }
 
-                    var path = item.Element("Path").Value;
-                    var pack = int.Parse(item.Element("Pack").Value);
+                    var path = item.Element("Path")!.Value;
+                    var pack = int.Parse(item.Element("Pack")!.Value);
                     var imagePath = "";
                     var image = item.Element("ImagePath");
                     if (image != null)
@@ -117,35 +131,90 @@ namespace SongCore.Data
                     }
 
                     var entry = new SongFolderEntry(name, path, (FolderLevelPack) pack, imagePath, isWIP, zipCaching);
-                    //   Console.WriteLine("Entry");
-                    //   Console.WriteLine("   " + entry.Name);
-                    //   Console.WriteLine("   " + entry.Path);
-                    //   Console.WriteLine("   " + entry.Pack);
-                    //    Console.WriteLine("   " + entry.WIP);
 
-                    SeparateSongFolder? cachedSeparate = null;
+                    PreparedSongFolder? cachedSeparate = null;
                     if (zipCaching)
                     {
                         var cachePack = (FolderLevelPack) pack == FolderLevelPack.CustomWIPLevels ? FolderLevelPack.CachedWIPLevels : FolderLevelPack.NewPack;
 
                         var cachedSongFolderEntry = new SongFolderEntry($"Cached {name}", Path.Combine(path, "Cache"), cachePack, imagePath, isWIP, false);
-                        cachedSeparate = new SeparateSongFolder(cachedSongFolderEntry);
+                        cachedSeparate = PrepareSongFolder(cachedSongFolderEntry);
                     }
 
-                    var separate = new SeparateSongFolder(entry, cachedSeparate);
-                    result.Add(separate);
-                    if (cachedSeparate != null)
-                    {
-                        result.Add(cachedSeparate);
-                    }
+                    result.Folders.Add(PrepareSongFolder(entry, cachedSeparate));
                 }
             }
             catch
             {
-                Plugin.Log.Warn("Error reading folders.xml! Make sure the file is properly formatted.");
+                result.ParseFailed = true;
             }
 
             return result;
+        }
+
+        internal static List<SeparateSongFolder> CreateSeparateFolders(PreparedSongFolders prepared)
+        {
+            var result = new List<SeparateSongFolder>();
+            var failed = prepared.ParseFailed;
+            try
+            {
+                foreach (var folder in prepared.Folders)
+                {
+                    var cachedSeparate = folder.CacheFolder == null ? null : new SeparateSongFolder(folder.CacheFolder);
+                    var separate = new SeparateSongFolder(folder, cachedSeparate);
+                    result.Add(separate);
+                    if (cachedSeparate != null)
+                        result.Add(cachedSeparate);
+                }
+            }
+            catch
+            {
+                failed = true;
+            }
+
+            if (failed)
+                Plugin.Log.Warn("Error reading folders.xml! Make sure the file is properly formatted.");
+
+            return result;
+        }
+
+        private static PreparedSongFolder PrepareSongFolder(SongFolderEntry entry, PreparedSongFolder? cacheFolder = null)
+        {
+            var prepared = new PreparedSongFolder(entry, cacheFolder);
+            if (entry.Pack == FolderLevelPack.NewPack && !string.IsNullOrEmpty(entry.ImagePath))
+            {
+                try
+                {
+                    if (File.Exists(entry.ImagePath))
+                        prepared.ImageData = File.ReadAllBytes(entry.ImagePath);
+                }
+                catch
+                {
+                    prepared.ImageReadFailed = true;
+                }
+            }
+
+            return prepared;
+        }
+
+        internal sealed class PreparedSongFolder
+        {
+            internal readonly SongFolderEntry Entry;
+            internal readonly PreparedSongFolder? CacheFolder;
+            internal byte[]? ImageData;
+            internal bool ImageReadFailed;
+
+            internal PreparedSongFolder(SongFolderEntry entry, PreparedSongFolder? cacheFolder)
+            {
+                Entry = entry;
+                CacheFolder = cacheFolder;
+            }
+        }
+
+        internal sealed class PreparedSongFolders
+        {
+            internal readonly List<PreparedSongFolder> Folders = new List<PreparedSongFolder>();
+            internal bool ParseFailed;
         }
     }
 

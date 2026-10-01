@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -46,7 +47,21 @@ namespace SongCore
 
         private Task? _loadingTask;
         private CancellationTokenSource _loadingTaskCancellationTokenSource = new();
+        private SongLoadProgress? _loadingProgress;
+        private Task _levelPackRefreshTask = Task.CompletedTask;
+        private bool _prepareLevelPacksOnWorkers;
+        private CancellationToken? _levelPackRequestToken;
+        private long _levelPackRefreshVersion;
         private bool _disposed;
+        private static Task _catalogTask = Task.CompletedTask;
+        private static readonly object HashLevelsLock = new();
+        private static readonly object PendingSaveDataLock = new();
+        private static volatile bool _stopping;
+
+        private sealed class SongLoadProgress
+        {
+            internal float Value;
+        }
 
         private Loader(GameScenesManager gameScenesManager, LevelFilteringNavigationController levelFilteringNavigationController, LevelPackDetailViewController levelPackDetailViewController, BeatmapLevelsModel beatmapLevelsModel, CustomLevelLoader customLevelLoader, SpriteAsyncLoader spriteAsyncLoader, BeatmapCharacteristicCollection beatmapCharacteristicCollection, ProgressBar progressBar, PluginConfig config, SettingsController settingsController, BSMLSettings bsmlSettings)
 
@@ -65,6 +80,11 @@ namespace SongCore
             // Path.GetFullPath is needed to normalize directory separators.
             _customWIPPath = Path.GetFullPath(Path.Combine(Application.dataPath, "CustomWIPLevels"));
             _customLevelsPath = Path.GetFullPath(CustomLevelPathHelper.customLevelsDirectoryPath);
+            if (Instance != null)
+            {
+                Instance._loadingTaskCancellationTokenSource.Cancel();
+                AreSongsLoading = false;
+            }
             Instance = this;
         }
 
@@ -136,11 +156,56 @@ namespace SongCore
             _gameScenesManager.transitionDidFinishEvent -= HandleSceneTransitionDidFinish;
         }
 
+        internal static void StopCatalog()
+        {
+            _stopping = true;
+            Instance?._loadingTaskCancellationTokenSource.Cancel();
+            AreSongsLoading = false;
+        }
+
+        private bool IsCurrentLoader => !_stopping && !_disposed && ReferenceEquals(Instance, this);
+
+        private bool OwnsLoadRequest(CancellationToken cancellationToken)
+        {
+            return IsCurrentLoader && cancellationToken == _loadingTaskCancellationTokenSource.Token;
+        }
+
+        private bool IsCurrentLoad(CancellationToken cancellationToken)
+        {
+            return OwnsLoadRequest(cancellationToken) && !cancellationToken.IsCancellationRequested;
+        }
+
+        private static Task QueueCatalogOperation(Func<Task> operation)
+        {
+            var previous = _catalogTask;
+            var task = RunCatalogOperationAsync(previous, operation);
+            _catalogTask = task;
+            return task;
+        }
+
+        private static async Task RunCatalogOperationAsync(Task previous, Func<Task> operation)
+        {
+            // Yield before invoking callbacks so reentrant requests see this operation in the queue.
+            await Task.Yield();
+            try
+            {
+                await previous;
+            }
+            catch
+            {
+                // Each caller observes its own operation; a failure must not stop later requests.
+            }
+            await UnityGame.SwitchToMainThreadAsync();
+            await operation();
+        }
+
         /// <summary>
         /// Refresh songs on "R" key, full refresh on "Ctrl"+"R"
         /// </summary>
         public void Tick()
         {
+            if (IsCurrentLoader && AreSongsLoading && _loadingProgress != null)
+                LoadingProgress = Volatile.Read(ref _loadingProgress.Value);
             if (Input.GetKeyDown(KeyCode.R))
             {
                 RefreshSongs(Input.GetKey(KeyCode.LeftControl));
@@ -155,7 +220,7 @@ namespace SongCore
         private async void HandleSceneTransitionDidFinish(GameScenesManager.SceneTransitionType sceneTransitionType, ScenesTransitionSetupData scenesTransitionSetupData, DiContainer container)
         {
             _gameScenesManager.transitionDidFinishEvent -= HandleSceneTransitionDidFinish;
-            if (_disposed)
+            if (!IsCurrentLoader)
                 return;
 
             // Ensures that the static references are still valid Unity objects.
@@ -166,20 +231,39 @@ namespace SongCore
             defaultCoverImage = _levelPackDetailViewController._defaultCoverSprite;
             beatmapCharacteristicCollection = _beatmapCharacteristicCollection;
 
-            if (Hashing.cachedSongHashData.IsEmpty)
+            try
             {
-                await Task.WhenAll(Hashing.LoadCachedSongHashesAsync(), Hashing.LoadCachedAudioDataAsync());
-                await UnityGame.SwitchToMainThreadAsync();
-                if (_disposed || !ReferenceEquals(Instance, this))
-                    return;
-                RefreshSongs();
+                await QueueCatalogOperation(async () =>
+                {
+                    await Plugin.FolderInitializationTask;
+                    await UnityGame.SwitchToMainThreadAsync();
+                    if (!IsCurrentLoader)
+                        return;
+                    if (Hashing.cachedSongHashData.IsEmpty || !AreSongsLoaded)
+                    {
+                        var loadCaches = Hashing.cachedSongHashData.IsEmpty;
+                        if (loadCaches)
+                            await Task.WhenAll(Hashing.LoadCachedSongHashesAsync(), Hashing.LoadCachedAudioDataAsync());
+                        await UnityGame.SwitchToMainThreadAsync();
+                        if (!IsCurrentLoader)
+                            return;
+                        RefreshSongs(loadCaches);
+                    }
+                    else
+                    {
+                        await RefreshLevelPacksAsync();
+                    }
+                });
             }
-            else
+            catch (Exception ex)
             {
-                RefreshLevelPacks();
+                Plugin.Log.Error("Failed to initialize song collections:");
+                Plugin.Log.Error(ex);
             }
 
-            if (_disposed || !ReferenceEquals(Instance, this))
+            await UnityGame.SwitchToMainThreadAsync();
+
+            if (!IsCurrentLoader)
                 return;
 
             SceneManager.activeSceneChanged += HandleActiveSceneChanged;
@@ -189,13 +273,15 @@ namespace SongCore
 
         private static void ReportDuplicateSongs()
         {
-            foreach (var (hash, levels) in Collections.HashLevelDictionary)
+            string[] duplicateHashes;
+            lock (HashLevelsLock)
             {
-                if (levels.Count <= 1)
-                {
-                    continue;
-                }
-
+                duplicateHashes = Collections.HashLevelDictionary
+                    .Where(entry => entry.Value.Count > 1)
+                    .Select(entry => entry.Key).ToArray();
+            }
+            foreach (var hash in duplicateHashes)
+            {
                 Plugin.Log.Notice("Found duplicates:");
 
                 foreach (var levelPath in Hashing.cachedSongHashData
@@ -214,7 +300,7 @@ namespace SongCore
 
         private void CancelSongLoading()
         {
-            if (AreSongsLoading)
+            if (IsCurrentLoader && AreSongsLoading)
             {
                 _loadingTaskCancellationTokenSource.Cancel();
                 AreSongsLoading = false;
@@ -237,6 +323,16 @@ namespace SongCore
         /// </summary>
         public async void RefreshLevelPacks()
         {
+            if (_prepareLevelPacksOnWorkers)
+            {
+                _levelPackRefreshTask = PrepareLevelPacksAsync(++_levelPackRefreshVersion, _levelPackRequestToken);
+                return;
+            }
+            await UnityGame.SwitchToMainThreadAsync();
+            if (!IsCurrentLoader)
+                return;
+            ++_levelPackRefreshVersion;
+
             CustomLevelsPack?.UpdateBeatmapLevels([.. CustomLevels.Values]);
             WIPLevelsPack?.UpdateBeatmapLevels([.. CustomWIPLevels.Values]);
             CachedWIPLevelsPack?.UpdateBeatmapLevels([.. CachedWIPLevels.Values]);
@@ -266,20 +362,23 @@ namespace SongCore
                 }
             }
 
-            foreach (var (levelID, loadedSaveData) in LoadedBeatmapSaveData)
+            lock (PendingSaveDataLock)
             {
-                _customLevelLoader._loadedBeatmapSaveData[levelID] = loadedSaveData;
+                foreach (var (levelID, loadedSaveData) in LoadedBeatmapSaveData)
+                    _customLevelLoader._loadedBeatmapSaveData[levelID] = loadedSaveData;
+                LoadedBeatmapSaveData.Clear();
             }
 
-            LoadedBeatmapSaveData.Clear();
+            RefreshNativeLevelPacks();
+        }
 
-            await UnityGame.SwitchToMainThreadAsync();
-
+        private void RefreshNativeLevelPacks(bool allowCancelledRequest = false)
+        {
             _beatmapLevelsModel.ClearLoadedBeatmapLevelsCaches();
             _beatmapLevelsModel._customLevelsRepository = CustomLevelsRepository;
             _beatmapLevelsModel.LoadAllBeatmapLevelPacks();
 
-            if (!_loadingTaskCancellationTokenSource.IsCancellationRequested && _levelFilteringNavigationController.isActiveAndEnabled)
+            if ((allowCancelledRequest || !_loadingTaskCancellationTokenSource.IsCancellationRequested) && _levelFilteringNavigationController.isActiveAndEnabled)
             {
                 _levelFilteringNavigationController.UpdateCustomSongs();
             }
@@ -287,9 +386,207 @@ namespace SongCore
             OnLevelPacksRefreshed?.Invoke();
         }
 
+        private async Task RefreshLevelPacksAsync(CancellationToken? requestToken = null)
+        {
+            await UnityGame.SwitchToMainThreadAsync();
+            if (!IsCurrentLoader || requestToken?.IsCancellationRequested == true)
+                return;
+            Task refresh;
+            _prepareLevelPacksOnWorkers = true;
+            _levelPackRequestToken = requestToken;
+            try
+            {
+                // Keep the public entry and its mod prefixes on the owner thread.
+                RefreshLevelPacks();
+                refresh = _levelPackRefreshTask;
+            }
+            finally
+            {
+                _prepareLevelPacksOnWorkers = false;
+                _levelPackRequestToken = null;
+            }
+            await refresh;
+        }
+
+        private async Task PrepareLevelPacksAsync(long version, CancellationToken? requestToken)
+        {
+            while (IsCurrentLoader && version == _levelPackRefreshVersion &&
+                   (!requestToken.HasValue || IsCurrentLoad(requestToken.Value)))
+            {
+                var repository = CustomLevelsRepository;
+                var customPack = CustomLevelsPack;
+                var wipPack = WIPLevelsPack;
+                var cachedPack = CachedWIPLevelsPack;
+                var custom = new LevelCatalogSnapshot(CustomLevels);
+                var wip = new LevelCatalogSnapshot(CustomWIPLevels);
+                var cached = new LevelCatalogSnapshot(CachedWIPLevels);
+                var folders = SeparateSongFolders.Select(folder => new FolderCatalogSnapshot(folder)).ToArray();
+                ConcurrentDictionary<string, CustomLevelLoader.LoadedSaveData> pendingSource;
+                KeyValuePair<string, CustomLevelLoader.LoadedSaveData>[] pending;
+                lock (PendingSaveDataLock)
+                {
+                    pendingSource = LoadedBeatmapSaveData;
+                    pending = pendingSource.ToArray();
+                }
+                var nativeSaveDataSource = _customLevelLoader._loadedBeatmapSaveData;
+                IEnumerator nativeSaveDataValidator = nativeSaveDataSource.GetEnumerator();
+                var nativeSaveData = nativeSaveDataSource.ToArray();
+                var updates = new List<SongCoreCustomBeatmapLevelPack.UpdateSnapshot>();
+                if (customPack != null)
+                    updates.Add(customPack.CaptureUpdate(custom.Levels));
+                if (wipPack != null)
+                    updates.Add(wipPack.CaptureUpdate(wip.Levels));
+                if (cachedPack != null)
+                    updates.Add(cachedPack.CaptureUpdate(cached.Levels));
+
+                var desiredPacks = repository?.CaptureLevelPacks().ToList() ?? new List<BeatmapLevelPack>();
+                if (cachedPack != null && repository != null)
+                {
+                    if (cached.Levels.Length > 0)
+                    {
+                        if (!desiredPacks.Contains(cachedPack))
+                            desiredPacks.Add(cachedPack);
+                    }
+                    else
+                    {
+                        desiredPacks.Remove(cachedPack);
+                    }
+                }
+                foreach (var folder in folders)
+                {
+                    if (folder.Pack != FolderLevelPack.NewPack)
+                        continue;
+                    var pack = folder.LevelPack ?? throw new InvalidOperationException("Separate song folder has no level pack.");
+                    updates.Add(pack.CaptureUpdate(folder.Levels.Levels));
+                    if (repository != null && (folder.Levels.Levels.Length > 0 || folder.AlwaysShow) && !desiredPacks.Contains(pack))
+                        desiredPacks.Add(pack);
+                }
+                var repositorySnapshot = repository?.CaptureRefresh(desiredPacks, updates);
+                var prepared = await Task.Run(() =>
+                {
+                    var preparedUpdates = updates.Select(update => update.Prepare()).ToArray();
+                    var saveData = new Dictionary<string, CustomLevelLoader.LoadedSaveData>(Math.Max(nativeSaveData.Length, pending.Length));
+                    foreach (var pair in nativeSaveData)
+                        saveData.Add(pair.Key, pair.Value);
+                    foreach (var pair in pending)
+                        saveData[pair.Key] = pair.Value;
+                    return (updates: preparedUpdates, repository: repositorySnapshot?.Prepare(preparedUpdates), saveData,
+                        pending: new ConcurrentDictionary<string, CustomLevelLoader.LoadedSaveData>());
+                });
+                await UnityGame.SwitchToMainThreadAsync();
+                if (!IsCurrentLoader || version != _levelPackRefreshVersion ||
+                    (requestToken.HasValue && !IsCurrentLoad(requestToken.Value)))
+                    return;
+                if (!ReferenceEquals(repository, CustomLevelsRepository) || !ReferenceEquals(customPack, CustomLevelsPack) ||
+                    !ReferenceEquals(wipPack, WIPLevelsPack) || !ReferenceEquals(cachedPack, CachedWIPLevelsPack) ||
+                    !custom.IsCurrent(CustomLevels) || !wip.IsCurrent(CustomWIPLevels) || !cached.IsCurrent(CachedWIPLevels) ||
+                    folders.Length != SeparateSongFolders.Count || !ReferenceEquals(nativeSaveDataSource, _customLevelLoader._loadedBeatmapSaveData))
+                    continue;
+                try
+                {
+                    nativeSaveDataValidator.Reset();
+                }
+                catch (InvalidOperationException)
+                {
+                    continue;
+                }
+                var current = repositorySnapshot?.IsCurrent() ?? true;
+                for (var i = 0; current && i < folders.Length; i++)
+                    current = ReferenceEquals(folders[i].Folder, SeparateSongFolders[i]) && folders[i].IsCurrent();
+                if (!current || updates.Any(update => !update.IsCurrent()))
+                    continue;
+
+                lock (PendingSaveDataLock)
+                {
+                    if (!ReferenceEquals(pendingSource, LoadedBeatmapSaveData) || pending.Length != pendingSource.Count ||
+                        pending.Any(pair => !pendingSource.TryGetValue(pair.Key, out var value) || !SameSaveData(pair.Value, value)))
+                        continue;
+                    foreach (var update in prepared.updates)
+                        update.Pack.Publish(update);
+                    if (prepared.repository != null)
+                        repository!.Publish(prepared.repository);
+                    var loader = _customLevelLoader;
+                    Accessors.LoadedSaveDataAccessor(ref loader) = prepared.saveData;
+                    LoadedBeatmapSaveData = prepared.pending;
+                }
+                RefreshNativeLevelPacks(!requestToken.HasValue);
+                return;
+            }
+        }
+
+        private static bool SameSaveData(CustomLevelLoader.LoadedSaveData left, CustomLevelLoader.LoadedSaveData right)
+        {
+            return ReferenceEquals(left.standardLevelInfoSaveData, right.standardLevelInfoSaveData) &&
+                   ReferenceEquals(left.beatmapLevelSaveData, right.beatmapLevelSaveData) &&
+                   ReferenceEquals(left.customLevelFolderInfo.folderPath, right.customLevelFolderInfo.folderPath) &&
+                   ReferenceEquals(left.customLevelFolderInfo.levelName, right.customLevelFolderInfo.levelName) &&
+                   ReferenceEquals(left.customLevelFolderInfo.levelInfoJsonString, right.customLevelFolderInfo.levelInfoJsonString);
+        }
+
+        private sealed class LevelCatalogSnapshot
+        {
+            private readonly ConcurrentDictionary<string, BeatmapLevel> _source;
+            private readonly KeyValuePair<string, BeatmapLevel>[] _entries;
+            internal readonly BeatmapLevel[] Levels;
+
+            internal LevelCatalogSnapshot(ConcurrentDictionary<string, BeatmapLevel> source)
+            {
+                _source = source;
+                _entries = source.ToArray();
+                Levels = _entries.Select(pair => pair.Value).ToArray();
+            }
+
+            internal bool IsCurrent(ConcurrentDictionary<string, BeatmapLevel> source)
+            {
+                return ReferenceEquals(_source, source) && _entries.Length == source.Count &&
+                       _entries.All(pair => source.TryGetValue(pair.Key, out var level) && ReferenceEquals(pair.Value, level));
+            }
+        }
+
+        private sealed class FolderCatalogSnapshot
+        {
+            internal readonly SeparateSongFolder Folder;
+            internal readonly FolderLevelPack Pack;
+            internal readonly SongCoreCustomBeatmapLevelPack? LevelPack;
+            internal readonly LevelCatalogSnapshot Levels;
+            internal readonly bool AlwaysShow;
+            private readonly SongFolderEntry _entry;
+            private readonly string _name, _path, _imagePath;
+            private readonly bool _wip, _cacheZips;
+
+            internal FolderCatalogSnapshot(SeparateSongFolder folder)
+            {
+                Folder = folder;
+                _entry = folder.SongFolderEntry;
+                Pack = _entry.Pack;
+                LevelPack = folder.LevelPack;
+                Levels = new LevelCatalogSnapshot(folder.Levels);
+                AlwaysShow = folder is ModSeparateSongFolder { AlwaysShow: true };
+                _name = _entry.Name;
+                _path = _entry.Path;
+                _imagePath = _entry.ImagePath;
+                _wip = _entry.WIP;
+                _cacheZips = _entry.CacheZIPs;
+            }
+
+            internal bool IsCurrent()
+            {
+                return ReferenceEquals(_entry, Folder.SongFolderEntry) && Pack == _entry.Pack &&
+                       ReferenceEquals(LevelPack, Folder.LevelPack) && Levels.IsCurrent(Folder.Levels) &&
+                       AlwaysShow == (Folder is ModSeparateSongFolder { AlwaysShow: true }) &&
+                       _name == _entry.Name && _path == _entry.Path && _imagePath == _entry.ImagePath &&
+                       _wip == _entry.WIP && _cacheZips == _entry.CacheZIPs;
+            }
+        }
+
         public void RefreshSongs(bool fullRefresh = true)
         {
-            if (_disposed || AreSongsLoading || SceneManager.GetActiveScene().name == SceneNames.kGameCoreSceneName)
+            if (!UnityGame.OnMainThread)
+            {
+                _ = UnityMainThreadTaskScheduler.Factory.StartNew(() => RefreshSongs(fullRefresh));
+                return;
+            }
+            if (!IsCurrentLoader || AreSongsLoading || SceneManager.GetActiveScene().name == SceneNames.kGameCoreSceneName)
             {
                 return;
             }
@@ -299,6 +596,9 @@ namespace SongCore
             AreSongsLoading = true;
             LoadingProgress = 0;
             _loadingTaskCancellationTokenSource = new CancellationTokenSource();
+            var cancellationToken = _loadingTaskCancellationTokenSource.Token;
+            var loadingProgress = new SongLoadProgress();
+            _loadingProgress = loadingProgress;
             if (LoadingStartedEvent != null)
             {
                 try
@@ -312,34 +612,82 @@ namespace SongCore
                 }
             }
 
-            RetrieveAllSongs(fullRefresh);
+            if (!IsCurrentLoad(cancellationToken))
+                return;
+            _loadingTask = QueueCatalogOperation(() => RetrieveAllSongs(fullRefresh, cancellationToken, loadingProgress));
+            _ = ObserveRefreshAsync(_loadingTask, cancellationToken);
         }
 
-        private async void RetrieveAllSongs(bool fullRefresh)
+        private async Task ObserveRefreshAsync(Task task, CancellationToken cancellationToken)
         {
-            var cancellationToken = _loadingTaskCancellationTokenSource.Token;
-            var cacheLoad = Collections.LoadCachedSongDataAsync();
-            if (!cacheLoad.IsCompleted)
-                _loadingTask = cacheLoad;
-            await cacheLoad;
+            try
+            {
+                await task;
+            }
+            catch (OperationCanceledException)
+            {
+                Plugin.Log.Warn("Song loading task cancelled.");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Warn($"Song loading task failed. {ex.Message}");
+            }
+            finally
+            {
+                await UnityGame.SwitchToMainThreadAsync();
+                if (OwnsLoadRequest(cancellationToken))
+                {
+                    _loadingTask = null;
+                    _loadingProgress = null;
+                    AreSongsLoading = false;
+                }
+            }
+        }
+
+        private async Task RetrieveAllSongs(bool fullRefresh, CancellationToken cancellationToken, SongLoadProgress loadingProgress)
+        {
+            if (!IsCurrentLoad(cancellationToken))
+                return;
+            await Task.WhenAll(Plugin.FolderInitializationTask, Collections.LoadCachedSongDataAsync());
             await UnityGame.SwitchToMainThreadAsync();
-            if (_disposed || !ReferenceEquals(Instance, this) || cancellationToken.IsCancellationRequested ||
-                cancellationToken != _loadingTaskCancellationTokenSource.Token)
+            if (!IsCurrentLoad(cancellationToken))
                 return;
 
             var stopwatch = new Stopwatch();
+            var separateSongFolders = SeparateSongFolders.ToArray();
+            var folderEntries = new Dictionary<SeparateSongFolder, SongFolderEntry>();
+            foreach (var folder in separateSongFolders)
+            {
+                CaptureFolder(folder);
+                if (folder.CacheFolder != null)
+                    CaptureFolder(folder.CacheFolder);
+            }
+            void CaptureFolder(SeparateSongFolder folder)
+            {
+                var entry = folder.SongFolderEntry;
+                folderEntries[folder] = new SongFolderEntry(entry.Name, entry.Path, entry.Pack, entry.ImagePath, entry.WIP, entry.CacheZIPs);
+            }
+            var loadedSongData = _customLevelLoader._loadedBeatmapSaveData.ToArray();
+            KeyValuePair<string, CustomLevelLoader.LoadedSaveData>[] pendingSongData;
+            lock (PendingSaveDataLock)
+                pendingSongData = LoadedBeatmapSaveData.ToArray();
 
             #region ClearAllDictionaries
 
             // Clear all beatmap dictionaries on full refresh
             if (fullRefresh)
             {
+                lock (PendingSaveDataLock)
+                    LoadedBeatmapSaveData.Clear();
                 CustomLevels.Clear();
                 CustomWIPLevels.Clear();
                 CachedWIPLevels.Clear();
-                Collections.LevelHashDictionary.Clear();
-                Collections.HashLevelDictionary.Clear();
-                foreach (var folder in SeparateSongFolders)
+                lock (HashLevelsLock)
+                {
+                    Collections.LevelHashDictionary.Clear();
+                    Collections.HashLevelDictionary.Clear();
+                }
+                foreach (var folder in separateSongFolders)
                 {
                     folder.Levels.Clear();
                 }
@@ -353,6 +701,7 @@ namespace SongCore
 
             var job = async () =>
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 foundSongPaths = fullRefresh
                     ? new ConcurrentDictionary<string, bool>()
                     : new ConcurrentDictionary<string, bool>(cachedSongPaths!.ToDictionary(path => Hashing.GetAbsolutePath(path, installPath), _ => false));
@@ -382,12 +731,12 @@ namespace SongCore
                         try
                         {
                             var cachePath = Path.Combine(_customWIPPath, "Cache");
-                            CacheZIPs(cachePath, _customWIPPath);
+                            CacheZIPs(cachePath, _customWIPPath, cancellationToken);
 
                             var cacheFolders = Directory.EnumerateDirectories(cachePath);
-                            LoadCachedZIPs(cacheFolders, fullRefresh, CachedWIPLevels);
+                            LoadCachedZIPs(cacheFolders, fullRefresh, CachedWIPLevels, cancellationToken);
                         }
-                        catch (Exception ex)
+                        catch (Exception ex) when (ex is not OperationCanceledException)
                         {
                             Plugin.Log.Error("Failed to load cached WIP levels: ");
                             Plugin.Log.Error(ex);
@@ -400,16 +749,17 @@ namespace SongCore
 
                     if (fullRefresh)
                     {
-                        foreach (var songFolder in SeparateSongFolders)
+                        foreach (var songFolder in separateSongFolders)
                         {
-                            if (songFolder.SongFolderEntry.CacheZIPs && songFolder.CacheFolder != null)
+                            var songFolderEntry = folderEntries[songFolder];
+                            if (songFolderEntry.CacheZIPs && songFolder.CacheFolder != null)
                             {
                                 var cacheFolder = songFolder.CacheFolder;
                                 try
                                 {
-                                    CacheZIPs(cacheFolder.SongFolderEntry.Path, songFolder.SongFolderEntry.Path);
+                                    CacheZIPs(folderEntries[cacheFolder].Path, songFolderEntry.Path, cancellationToken);
                                 }
-                                catch (Exception ex)
+                                catch (Exception ex) when (ex is not OperationCanceledException)
                                 {
                                     Plugin.Log.Error("Failed to load cached WIP levels:");
                                     Plugin.Log.Error(ex);
@@ -435,41 +785,46 @@ namespace SongCore
                     var parallelOptions = new ParallelOptions
                     {
                         MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2 - 1),
-                        CancellationToken = _loadingTaskCancellationTokenSource.Token
+                        CancellationToken = cancellationToken
                     };
                     var processedSongsCount = 0;
 
                     // Clear removed songs from loaded data, in case they were removed manually.
-                    if (_customLevelLoader._loadedBeatmapSaveData.Count > 0)
+                    if (loadedSongData.Length > 0 || pendingSongData.Length > 0)
                     {
                         var folders = songFolders
-                            .Concat(SeparateSongFolders
-                                .Select(f => Path.GetFullPath(f.SongFolderEntry.Path))
+                            .Concat(separateSongFolders
+                                .Select(f => Path.GetFullPath(folderEntries[f].Path))
                                 .Select(p => new DirectoryInfo(p))
                                 .Where(d => d.Exists)
                                 .SelectMany(d => d.EnumerateDirectories()
                                     .Where(d => d.Exists && !CustomLevelPathHelper.IsHiddenDirectory(d))
                                     .Select(d => d.FullName)))
+                            .Concat(CachedWIPLevels.Keys)
                             .ToHashSet();
 
-                        // Need to make a copy of the loaded save data since we might modify the iterated collection.
-                        foreach (var loadedSaveData in _customLevelLoader._loadedBeatmapSaveData.Values.ToArray())
+                        var missing = loadedSongData.Concat(pendingSongData)
+                            .Where(pair => !folders.Contains(pair.Value.customLevelFolderInfo.folderPath))
+                            .GroupBy(pair => pair.Value.customLevelFolderInfo.folderPath)
+                            .Select(group => (path: group.Key, levelIDs: group.Select(pair => pair.Key).ToArray())).ToArray();
+                        await UnityMainThreadTaskScheduler.Factory.StartNew(() =>
                         {
-                            if (!folders.Contains(loadedSaveData.customLevelFolderInfo.folderPath))
+                            if (!IsCurrentLoad(cancellationToken))
+                                return;
+                            foreach (var (path, levelIDs) in missing)
                             {
-                                Plugin.Log.Warn($"Removing {loadedSaveData.customLevelFolderInfo.folderPath} from loaded levels");
-                                DeleteSingleSong(loadedSaveData.customLevelFolderInfo.folderPath, false);
+                                Plugin.Log.Warn($"Removing {path} from loaded levels");
+                                RemoveSongFromCollections(path, levelIDs);
                             }
-                        }
-
-                        if (!fullRefresh)
-                        {
-                            StoreLoadedBeatmapSaveData();
-                        }
+                            if (!fullRefresh)
+                                StoreLoadedBeatmapSaveData();
+                        });
+                        cancellationToken.ThrowIfCancellationRequested();
                     }
 
                     Parallel.ForEach(songFolders, parallelOptions, folder =>
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         string[] results;
                         try
                         {
@@ -490,6 +845,7 @@ namespace SongCore
 
                         foreach (var result in results)
                         {
+                            cancellationToken.ThrowIfCancellationRequested();
                             try
                             {
                                 var songPath = Path.GetDirectoryName(result)!;
@@ -504,7 +860,7 @@ namespace SongCore
                                 }
 
                                 var wip = songPath.Contains("CustomWIPLevels");
-                                var customLevel = LoadCustomLevel(songPath);
+                                var customLevel = LoadCustomLevelInternal(songPath);
                                 if (!customLevel.HasValue)
                                 {
                                     Plugin.Log.Error($"Failed to load custom level: {folder}");
@@ -530,7 +886,9 @@ namespace SongCore
                             }
                         }
 
-                        LoadingProgress = (float)Interlocked.Increment(ref processedSongsCount) / songFoldersCount;
+                        var progress = (float)Interlocked.Increment(ref processedSongsCount) / songFoldersCount;
+                        if (!cancellationToken.IsCancellationRequested)
+                            Volatile.Write(ref loadingProgress.Value, progress);
                     });
 
                     #endregion
@@ -539,21 +897,28 @@ namespace SongCore
 
                     // Load beatmaps in separate song folders (created in folders.xml or by other mods)
                     // Assign beatmaps to their respective pack (custom levels, wip levels, or separate)
-                    await UnityMainThreadTaskScheduler.Factory.StartNew(() => _progressBar.ShowMessage($"Loading {SeparateSongFolders.Count} separate folders", true));
-                    foreach (var entry in SeparateSongFolders)
+                    await UnityMainThreadTaskScheduler.Factory.StartNew(() =>
                     {
+                        if (IsCurrentLoad(cancellationToken))
+                            _progressBar.ShowMessage($"Loading {separateSongFolders.Length} separate folders", true);
+                    });
+                    foreach (var entry in separateSongFolders)
+                    {
+                        var folderEntry = folderEntries[entry];
+                        cancellationToken.ThrowIfCancellationRequested();
                         try
                         {
-                            if (!Directory.Exists(entry.SongFolderEntry.Path))
+                            if (!Directory.Exists(folderEntry.Path))
                             {
                                 continue;
                             }
 
-                            var entryFolders = Directory.GetDirectories(entry.SongFolderEntry.Path);
+                            var entryFolders = Directory.GetDirectories(folderEntry.Path);
 
                             float count = 0;
                             foreach (var folder in entryFolders)
                             {
+                                cancellationToken.ThrowIfCancellationRequested();
                                 count++;
                                 // Search for an info.dat in the beatmap folder
                                 string[] results;
@@ -576,6 +941,7 @@ namespace SongCore
 
                                 foreach (var result in results)
                                 {
+                                    cancellationToken.ThrowIfCancellationRequested();
                                     try
                                     {
                                         // On quick refresh: Check if the beatmap directory is already present in the respective beatmap dictionary
@@ -583,7 +949,7 @@ namespace SongCore
                                         var songPath = Path.GetDirectoryName(result)!;
                                         if (!fullRefresh)
                                         {
-                                            switch (entry.SongFolderEntry.Pack)
+                                            switch (folderEntry.Pack)
                                             {
                                                 case FolderLevelPack.NewPack when SearchBeatmapInMapPack(entry.Levels, songPath):
                                                 case FolderLevelPack.CustomLevels when SearchBeatmapInMapPack(CustomLevels, songPath):
@@ -593,7 +959,7 @@ namespace SongCore
                                             }
                                         }
 
-                                        if (entry.SongFolderEntry.Pack == FolderLevelPack.CustomLevels || entry.SongFolderEntry is { Pack: FolderLevelPack.NewPack, WIP: false })
+                                        if (folderEntry.Pack == FolderLevelPack.CustomLevels || folderEntry is { Pack: FolderLevelPack.NewPack, WIP: false })
                                         {
                                             if (AssignBeatmapToSeparateFolder(CustomLevels, songPath, entry.Levels))
                                             {
@@ -611,7 +977,7 @@ namespace SongCore
                                             }
                                         }
 
-                                        var customLevel = LoadCustomLevel(songPath, entry.SongFolderEntry);
+                                        var customLevel = LoadCustomLevelInternal(songPath, folderEntry);
                                         if (!customLevel.HasValue)
                                         {
                                             Plugin.Log.Error($"Failed to load custom level: {folder}");
@@ -623,7 +989,8 @@ namespace SongCore
                                             foundSongPaths.TryAdd(songPath, false);
                                         }
 
-                                        LoadingProgress = count / entryFolders.Length;
+                                        if (!cancellationToken.IsCancellationRequested)
+                                            Volatile.Write(ref loadingProgress.Value, count / entryFolders.Length);
                                     }
                                     catch (Exception e)
                                     {
@@ -633,16 +1000,16 @@ namespace SongCore
                                 }
                             }
                         }
-                        catch (Exception ex)
+                        catch (Exception ex) when (ex is not OperationCanceledException)
                         {
-                            Plugin.Log.Error($"Failed to load separate folder {entry.SongFolderEntry.Name}");
+                            Plugin.Log.Error($"Failed to load separate folder {folderEntry.Name}");
                             Plugin.Log.Error(ex);
                         }
                     }
 
                     #endregion
 
-                    _loadingTaskCancellationTokenSource.Token.ThrowIfCancellationRequested();
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
                 {
@@ -653,111 +1020,86 @@ namespace SongCore
                 #endregion
             };
 
-            var finish = async () =>
-            {
-                #region CountBeatmapsAndUpdateLevelPacks
+            await Task.Run(job, cancellationToken);
+            await UnityGame.SwitchToMainThreadAsync();
+            if (!IsCurrentLoad(cancellationToken))
+                return;
 
+            var prepared = await Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 stopwatch.Stop();
                 var songCountWSF = CustomLevels.Count + CustomWIPLevels.Count;
-                var songCount = songCountWSF + SeparateSongFolders.Sum(f => f.Levels.Count);
-
+                var songCount = songCountWSF + separateSongFolders.Sum(folder => folder.Levels.Count);
                 var folderCount = songCount - songCountWSF;
                 var songOrSongs = songCount == 1 ? "song" : "songs";
                 var folderOrFolders = folderCount == 1 ? "folder" : "folders";
                 Plugin.Log.Info($"Loaded {songCount} new {songOrSongs} ({songCountWSF}) in CustomLevels | {folderCount} in separate {folderOrFolders}) in {stopwatch.Elapsed.TotalSeconds} seconds");
-                try
+                foreach (var folderEntry in separateSongFolders)
                 {
-                    #region AddSeparateFolderBeatmapsToRespectivePacks
-
-                    foreach (var folderEntry in SeparateSongFolders)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    ConcurrentDictionary<string, BeatmapLevel>? target = folderEntries[folderEntry].Pack switch
                     {
-                        ConcurrentDictionary<string, BeatmapLevel>? target = folderEntry.SongFolderEntry.Pack switch
-                        {
-                            FolderLevelPack.CustomLevels => CustomLevels,
-                            FolderLevelPack.CustomWIPLevels => CustomWIPLevels,
-                            FolderLevelPack.CachedWIPLevels => CachedWIPLevels,
-                            _ => null
-                        };
-
-                        if (target == null)
-                            continue;
-
-                        foreach (var (path, level) in folderEntry.Levels)
-                            target.TryAdd(path, level);
-                    }
-
-                    #endregion
-
-                    #region CreateLevelPacks
-
-                    CustomLevelsRepository ??= SongCoreBeatmapLevelsRepository.CreateNew();
-                    if (CustomLevelsRepository.beatmapLevelPacks.Count == 0)
-                    {
-                        // Create level collections and level packs
-                        // Add level packs to the custom levels pack collection
-
-                        // This creates unity sprites, so it needs to be on the main thread
-                        await UnityMainThreadTaskScheduler.Factory.StartNew(() =>
-                        {
-                            CustomLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + CustomLevelPathHelper.kCustomLevelsDirectoryName, "Custom Levels", defaultCoverImage, CustomLevels.Values.ToArray());
-                            WIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CustomWIPLevels", "WIP Levels", UI.BasicUI.WIPIcon, CustomWIPLevels.Values.ToArray());
-                            CachedWIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CachedWIPLevels", "Cached WIP Levels", UI.BasicUI.WIPIcon,
-                                CachedWIPLevels.Values.ToArray());
-                        });
-
-                        CustomLevelsRepository.ClearLevelPacks();
-                        CustomLevelsRepository.AddLevelPack(CustomLevelsPack ?? throw new InvalidOperationException("CustomLevelsPack was not created."));
-                        CustomLevelsRepository.AddLevelPack(WIPLevelsPack ?? throw new InvalidOperationException("WIPLevelsPack was not created."));
-                        CustomLevelsRepository.AddLevelPack(CachedWIPLevelsPack ?? throw new InvalidOperationException("CachedWIPLevelsPack was not created."));
-                    }
-
-                    #endregion
-
-                    RefreshLevelPacks();
+                        FolderLevelPack.CustomLevels => CustomLevels,
+                        FolderLevelPack.CustomWIPLevels => CustomWIPLevels,
+                        FolderLevelPack.CachedWIPLevels => CachedWIPLevels,
+                        _ => null
+                    };
+                    if (target == null)
+                        continue;
+                    foreach (var (path, level) in folderEntry.Levels)
+                        target.TryAdd(path, level);
                 }
-                catch (Exception ex)
-                {
-                    Plugin.Log.Error("Failed to setup LevelPacks:");
-                    Plugin.Log.Error(ex);
-                }
-
-                #endregion
-
-                AreSongsLoaded = true;
-                AreSongsLoading = false;
-                LoadingProgress = 1;
-
-                _loadingTask = null;
-                await Task.Run(ReportDuplicateSongs);
-                await UnityMainThreadTaskScheduler.Factory.StartNew(() => SongsLoadedEvent?.Invoke(this, CustomLevels));
-
-                var currentSongPaths = foundSongPaths.Keys.ToHashSet();
-                await Task.WhenAll(Hashing.SaveCachedSongHashesAsync(currentSongPaths), Hashing.SaveCachedAudioDataAsync(currentSongPaths), Collections.SaveCachedSongDataAsync());
-            };
+                return (custom: CustomLevels.Values.ToArray(), wip: CustomWIPLevels.Values.ToArray(), cached: CachedWIPLevels.Values.ToArray());
+            }, cancellationToken);
+            await UnityGame.SwitchToMainThreadAsync();
+            if (!IsCurrentLoad(cancellationToken))
+                return;
 
             try
             {
-                await (_loadingTask = Task.Run(job, _loadingTaskCancellationTokenSource.Token));
+                CustomLevelsRepository ??= SongCoreBeatmapLevelsRepository.CreateNew();
+                if (CustomLevelsRepository.CaptureLevelPacks().Length == 0)
+                {
+                    CustomLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + CustomLevelPathHelper.kCustomLevelsDirectoryName, "Custom Levels", defaultCoverImage, prepared.custom);
+                    WIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CustomWIPLevels", "WIP Levels", UI.BasicUI.WIPIcon, prepared.wip);
+                    CachedWIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CachedWIPLevels", "Cached WIP Levels", UI.BasicUI.WIPIcon, prepared.cached);
+                    CustomLevelsRepository.StageLevelPacks([CustomLevelsPack, WIPLevelsPack, CachedWIPLevelsPack]);
+                }
+                await RefreshLevelPacksAsync(cancellationToken);
+                await UnityGame.SwitchToMainThreadAsync();
             }
             catch (Exception ex)
             {
-                Plugin.Log.Warn($"Song loading task failed. {ex.Message}");
+                Plugin.Log.Error("Failed to setup LevelPacks:");
+                Plugin.Log.Error(ex);
                 return;
             }
+            if (!IsCurrentLoad(cancellationToken))
+                return;
 
-            if (_loadingTask.IsCompleted && !_loadingTask.IsCanceled)
-            {
-                await Task.Run(finish);
-            }
-            else
-            {
-                Plugin.Log.Warn("Song loading task cancelled.");
-            }
+            await Task.Run(ReportDuplicateSongs, cancellationToken);
+            await UnityGame.SwitchToMainThreadAsync();
+            if (!IsCurrentLoad(cancellationToken))
+                return;
+            AreSongsLoaded = true;
+            AreSongsLoading = false;
+            LoadingProgress = 1;
+            SongsLoadedEvent?.Invoke(this, CustomLevels);
+            if (!IsCurrentLoad(cancellationToken))
+                return;
+            var currentSongPaths = await Task.Run(() => foundSongPaths.Keys.ToHashSet(), cancellationToken);
+            await Task.WhenAll(Hashing.SaveCachedSongHashesAsync(currentSongPaths), Hashing.SaveCachedAudioDataAsync(currentSongPaths), Collections.SaveCachedSongDataAsync());
         }
 
         internal void StoreLoadedBeatmapSaveData()
         {
-            LoadedBeatmapSaveData = new ConcurrentDictionary<string, CustomLevelLoader.LoadedSaveData>(_customLevelLoader._loadedBeatmapSaveData);
+            if (!UnityGame.OnMainThread)
+                throw new InvalidOperationException("Loaded song data must be captured on the main thread.");
+            if (!IsCurrentLoader)
+                return;
+            lock (PendingSaveDataLock)
+                LoadedBeatmapSaveData = new ConcurrentDictionary<string, CustomLevelLoader.LoadedSaveData>(_customLevelLoader._loadedBeatmapSaveData);
         }
 
         /// <summary>
@@ -767,8 +1109,25 @@ namespace SongCore
         /// <param name="deleteFolder">Option to delete the base folder of the beatmap</param>
         public void DeleteSong(string folderPath, bool deleteFolder = true)
         {
-            DeleteSingleSong(folderPath, deleteFolder);
-            RefreshLevelPacks();
+            ValidateSongDeletion(folderPath);
+            var removed = UnityGame.OnMainThread
+                ? RemoveSongFromCollections(folderPath)
+                : UnityMainThreadTaskScheduler.Factory.StartNew(() => RemoveSongFromCollections(folderPath)).GetAwaiter().GetResult();
+            if (removed && deleteFolder)
+                DeleteSongDirectory(folderPath);
+            if (UnityGame.OnMainThread)
+            {
+                if (IsCurrentLoader)
+                    RefreshLevelPacks();
+            }
+            else
+            {
+                UnityMainThreadTaskScheduler.Factory.StartNew(() =>
+                {
+                    if (IsCurrentLoader)
+                        RefreshLevelPacks();
+                }).GetAwaiter().GetResult();
+            }
         }
 
         /// <summary>
@@ -778,58 +1137,123 @@ namespace SongCore
         /// <param name="deleteFolder">Option to delete the base folder of the beatmap</param>
         public async Task DeleteSongsAsync(List<string> folderPaths, bool deleteFolder = true)
         {
-            foreach (var folderPath in folderPaths)
+            var requestedPaths = folderPaths.ToArray();
+            await UnityGame.SwitchToMainThreadAsync();
+            await QueueCatalogOperation(async () =>
             {
-                await Task.Run(() => DeleteSingleSong(folderPath, deleteFolder));
-            }
-
-            RefreshLevelPacks();
+                if (!IsCurrentLoader)
+                    return;
+                var savedData = _customLevelLoader._loadedBeatmapSaveData.ToArray();
+                KeyValuePair<string, CustomLevelLoader.LoadedSaveData>[] pendingData;
+                lock (PendingSaveDataLock)
+                    pendingData = LoadedBeatmapSaveData.ToArray();
+                var savedIDs = await Task.Run(() =>
+                {
+                    var paths = new HashSet<string>(requestedPaths);
+                    return savedData.Concat(pendingData)
+                        .Where(pair => paths.Contains(pair.Value.customLevelFolderInfo.folderPath))
+                        .GroupBy(pair => pair.Value.customLevelFolderInfo.folderPath)
+                        .ToDictionary(group => group.Key, group => group.Select(pair => pair.Key).ToArray());
+                });
+                await UnityGame.SwitchToMainThreadAsync();
+                if (!IsCurrentLoader)
+                    return;
+                foreach (var folderPath in requestedPaths)
+                {
+                    ValidateSongDeletion(folderPath);
+                    var levelIDs = savedIDs.TryGetValue(folderPath, out var saved) ? saved : Array.Empty<string>();
+                    if (RemoveSongFromCollections(folderPath, levelIDs) && deleteFolder)
+                        await Task.Run(() => DeleteSongDirectory(folderPath));
+                    await UnityGame.SwitchToMainThreadAsync();
+                    if (!IsCurrentLoader)
+                        return;
+                }
+                await RefreshLevelPacksAsync();
+            });
         }
 
-        private void DeleteSingleSong(string folderPath, bool deleteFolder)
+        private static void ValidateSongDeletion(string folderPath)
         {
             if (folderPath.EndsWith("(Built in)", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Cannot delete built-in levels.");
             }
+        }
 
-            //Remove the level from SongCore Collections
+        private bool RemoveSongFromCollections(string folderPath, IReadOnlyList<string>? savedIDs = null)
+        {
+            ValidateSongDeletion(folderPath);
+            if (!IsCurrentLoader)
+                return false;
             try
             {
-                if (!(CustomLevels.TryRemove(folderPath, out var level) || CustomWIPLevels.TryRemove(folderPath, out level) || CachedWIPLevels.TryRemove(folderPath, out level)))
+                var levelIDs = new HashSet<string>();
+                if (CustomLevels.TryRemove(folderPath, out var level))
+                    levelIDs.Add(level.levelID);
+                if (CustomWIPLevels.TryRemove(folderPath, out level))
+                    levelIDs.Add(level.levelID);
+                if (CachedWIPLevels.TryRemove(folderPath, out level))
+                    levelIDs.Add(level.levelID);
+                foreach (var folderEntry in SeparateSongFolders)
                 {
-                    foreach (var folderEntry in SeparateSongFolders)
+                    if (folderEntry.Levels.TryRemove(folderPath, out level))
+                        levelIDs.Add(level.levelID);
+                }
+                if (savedIDs == null)
+                {
+                    foreach (var (levelID, data) in _customLevelLoader._loadedBeatmapSaveData)
+                        if (data.customLevelFolderInfo.folderPath == folderPath)
+                            levelIDs.Add(levelID);
+                    foreach (var (levelID, data) in LoadedBeatmapSaveData)
+                        if (data.customLevelFolderInfo.folderPath == folderPath)
+                            levelIDs.Add(levelID);
+                }
+                else
+                {
+                    foreach (var levelID in savedIDs)
                     {
-                        folderEntry.Levels.TryRemove(folderPath, out level);
+                        if ((_customLevelLoader._loadedBeatmapSaveData.TryGetValue(levelID, out var data) && data.customLevelFolderInfo.folderPath == folderPath) ||
+                            (LoadedBeatmapSaveData.TryGetValue(levelID, out data) && data.customLevelFolderInfo.folderPath == folderPath))
+                            levelIDs.Add(levelID);
                     }
                 }
 
-                if (level != null)
+                foreach (var levelID in levelIDs)
                 {
-                    if (Collections.LevelHashDictionary.TryRemove(level.levelID, out var hash))
+                    lock (HashLevelsLock)
                     {
-                        Collections.CustomSongsData.TryRemove(level.levelID, out _);
-                        if (Collections.HashLevelDictionary.TryGetValue(hash, out var levels))
+                        if (Collections.LevelHashDictionary.TryRemove(levelID, out var hash) &&
+                            Collections.HashLevelDictionary.TryGetValue(hash, out var levels))
                         {
-                            levels.Remove(level.levelID);
-                            if (levels.Count == 0)
+                            lock (levels)
                             {
-                                Collections.HashLevelDictionary.TryRemove(hash, out _);
+                                levels.RemoveAll(id => id == levelID);
+                                if (levels.Count == 0)
+                                    Collections.HashLevelDictionary.TryRemove(hash, out _);
                             }
                         }
                     }
-
-                    _customLevelLoader._loadedBeatmapSaveData.Remove(level.levelID);
+                    Collections.CustomSongsData.TryRemove(levelID, out _);
+                    lock (PendingSaveDataLock)
+                        LoadedBeatmapSaveData.TryRemove(levelID, out _);
+                    _customLevelLoader._loadedBeatmapSaveData.Remove(levelID);
                 }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Exception trying to delete song: {folderPath}");
+                Plugin.Log.Error(ex);
+                return false;
+            }
+        }
 
-                //Delete the directory
-                if (deleteFolder)
-                {
-                    if (Directory.Exists(folderPath))
-                    {
-                        Directory.Delete(folderPath, true);
-                    }
-                }
+        private static void DeleteSongDirectory(string folderPath)
+        {
+            try
+            {
+                if (Directory.Exists(folderPath))
+                    Directory.Delete(folderPath, true);
             }
             catch (Exception ex)
             {
@@ -869,27 +1293,28 @@ namespace SongCore
 
                 var levelID = CustomLevelLoader.kCustomLevelPrefixId + hash;
                 var folderName = new DirectoryInfo(loadedSaveData.customLevelFolderInfo.folderPath).Name;
-                while (!Collections.LevelHashDictionary.TryAdd(levelID + (wip ? " WIP" : ""), hash))
+                lock (HashLevelsLock)
                 {
-                    levelID += $"_{folderName}";
-                }
+                    while (!Collections.LevelHashDictionary.TryAdd(levelID + (wip ? " WIP" : ""), hash))
+                        levelID += $"_{folderName}";
 
-                if (wip)
-                {
-                    levelID += " WIP";
-                }
+                    if (wip)
+                        levelID += " WIP";
 
-                Collections.HashLevelDictionary.AddOrUpdate(hash, new List<string> { levelID }, (_, levels) =>
-                {
-                    lock (levels)
+                    if (Collections.HashLevelDictionary.TryGetValue(hash, out var levels))
                     {
-                        levels.Add(levelID);
+                        lock (levels)
+                            levels.Add(levelID);
                     }
-                    return levels;
-                });
+                    else
+                    {
+                        Collections.HashLevelDictionary.TryAdd(hash, new List<string> { levelID });
+                    }
+                }
                 BlacklistLevelFiles(loadedSaveData);
                 Collections.CreateCustomLevelSongData(levelID, loadedSaveData);
-                LoadedBeatmapSaveData.TryAdd(levelID, loadedSaveData);
+                lock (PendingSaveDataLock)
+                    LoadedBeatmapSaveData.TryAdd(levelID, loadedSaveData);
 
                 Accessors.LevelIDAccessor(ref beatmapLevel) = levelID;
                 GetSongDuration(loadedSaveData, beatmapLevel);
@@ -942,8 +1367,9 @@ namespace SongCore
         /// </summary>
         /// <param name="cachePath">Directory of cache folder</param>
         /// <param name="songFolderPath">Directory of folder containing the zips</param>
-        private static void CacheZIPs(string cachePath, string songFolderPath)
+        private static void CacheZIPs(string cachePath, string songFolderPath, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!Directory.Exists(cachePath))
             {
                 Directory.CreateDirectory(cachePath);
@@ -952,11 +1378,13 @@ namespace SongCore
             var cache = new DirectoryInfo(cachePath);
             foreach (var file in cache.EnumerateFiles())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 file.Delete();
             }
 
             foreach (var folder in cache.EnumerateDirectories())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 folder.Delete(true);
             }
 
@@ -964,6 +1392,7 @@ namespace SongCore
 
             foreach (var zip in zips)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     using var fileStream = File.OpenRead(zip);
@@ -985,15 +1414,16 @@ namespace SongCore
         /// <param name="fullRefresh"></param>
         /// <param name="beatmapDictionary"></param>
         /// <param name="folderEntry"></param>
-        private void LoadCachedZIPs(IEnumerable<string> cacheFolders, bool fullRefresh, ConcurrentDictionary<string, BeatmapLevel> beatmapDictionary, SongFolderEntry? folderEntry = null)
+        private void LoadCachedZIPs(IEnumerable<string> cacheFolders, bool fullRefresh, ConcurrentDictionary<string, BeatmapLevel> beatmapDictionary, CancellationToken cancellationToken, SongFolderEntry? folderEntry = null)
         {
             var options = new ParallelOptions
             {
                 MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2 - 1),
-                CancellationToken = _loadingTaskCancellationTokenSource.Token
+                CancellationToken = cancellationToken
             };
             Parallel.ForEach(cacheFolders, options, cachedFolder =>
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 string[] results;
                 try
                 {
@@ -1013,6 +1443,7 @@ namespace SongCore
 
                 foreach (var result in results)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     try
                     {
                         var songPath = Path.GetDirectoryName(result)!;
@@ -1026,7 +1457,7 @@ namespace SongCore
 
                         try
                         {
-                            var customLevel = LoadCustomLevel(songPath, folderEntry);
+                            var customLevel = LoadCustomLevelInternal(songPath, folderEntry);
                             if (!customLevel.HasValue)
                             {
                                 Plugin.Log.Error($"Failed to load custom level: {folderEntry}");
