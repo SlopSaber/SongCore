@@ -14,6 +14,27 @@ namespace SongCore.OverrideClasses
         {
         }
 
+        internal SongCoreCustomBeatmapLevelPack(string packID, string packName, Sprite? coverImage, InitialLevels levels)
+            : base(packID, packName, packName, CreateCover(coverImage), coverImage ?? Loader.defaultCoverImage, PackBuyOption.Default, Array.Empty<BeatmapLevel>(), PlayerSensitivityFlag.Safe)
+        {
+            // Both fields must agree before native callers can add or clear additional levels.
+            var that = (BeatmapLevelPack)this;
+            Accessors.BaseBeatmapLevelsAccessor(ref that) = levels.BaseLevels;
+            Accessors.AllBeatmapLevelsAccessor(ref that) = levels.AllLevels;
+        }
+
+        internal sealed class InitialLevels
+        {
+            internal BeatmapLevel[] BaseLevels { get; }
+            internal List<BeatmapLevel> AllLevels { get; }
+
+            internal InitialLevels(BeatmapLevel[] ownedLevels)
+            {
+                BaseLevels = ownedLevels;
+                AllLevels = new List<BeatmapLevel>(ownedLevels);
+            }
+        }
+
         private static Sprite CreateCover(Sprite? coverImage)
         {
             coverImage ??= Loader.defaultCoverImage;

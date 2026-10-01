@@ -1061,10 +1061,20 @@ namespace SongCore
                 CustomLevelsRepository ??= SongCoreBeatmapLevelsRepository.CreateNew();
                 if (CustomLevelsRepository.CaptureLevelPacks().Length == 0)
                 {
-                    CustomLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + CustomLevelPathHelper.kCustomLevelsDirectoryName, "Custom Levels", defaultCoverImage, prepared.custom);
-                    WIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CustomWIPLevels", "WIP Levels", UI.BasicUI.WIPIcon, prepared.wip);
-                    CachedWIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CachedWIPLevels", "Cached WIP Levels", UI.BasicUI.WIPIcon, prepared.cached);
-                    CustomLevelsRepository.StageLevelPacks([CustomLevelsPack, WIPLevelsPack, CachedWIPLevelsPack]);
+                    var initial = await Task.Run(() =>
+                        (custom: new SongCoreCustomBeatmapLevelPack.InitialLevels(prepared.custom),
+                            wip: new SongCoreCustomBeatmapLevelPack.InitialLevels(prepared.wip),
+                            cached: new SongCoreCustomBeatmapLevelPack.InitialLevels(prepared.cached)), cancellationToken);
+                    await UnityGame.SwitchToMainThreadAsync();
+                    if (!IsCurrentLoad(cancellationToken))
+                        return;
+                    if (CustomLevelsRepository.CaptureLevelPacks().Length == 0)
+                    {
+                        CustomLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + CustomLevelPathHelper.kCustomLevelsDirectoryName, "Custom Levels", defaultCoverImage, initial.custom);
+                        WIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CustomWIPLevels", "WIP Levels", UI.BasicUI.WIPIcon, initial.wip);
+                        CachedWIPLevelsPack = new SongCoreCustomBeatmapLevelPack(CustomLevelLoader.kCustomLevelPackPrefixId + "CachedWIPLevels", "Cached WIP Levels", UI.BasicUI.WIPIcon, initial.cached);
+                        CustomLevelsRepository.StageLevelPacks([CustomLevelsPack, WIPLevelsPack, CachedWIPLevelsPack]);
+                    }
                 }
                 await RefreshLevelPacksAsync(cancellationToken);
                 await UnityGame.SwitchToMainThreadAsync();
