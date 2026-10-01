@@ -28,6 +28,7 @@ namespace SongCore.Hooks
         private readonly Dictionary<string, Task<Dictionary<string, byte[]?>>> _iconReads = new();
         private long _iconSelectionVersion;
         private bool _disposed;
+        private readonly Dictionary<LevelBar, long> _levelBarVersions = new();
 
         private Hook _getSongDataHook = null!;
         private Hook _textSizeLimitHook = null!;
@@ -68,6 +69,7 @@ namespace SongCore.Hooks
             _disposed = true;
             _iconSelectionVersion++;
             _iconReads.Clear();
+            _levelBarVersions.Clear();
             _getSongDataHook.Dispose();
             _textSizeLimitHook.Dispose();
             _customDifficultyLabelsHook.Dispose();
@@ -164,6 +166,8 @@ namespace SongCore.Hooks
 
         private Task SetupData(Func<LevelBar, BeatmapLevel, BeatmapDifficulty, BeatmapCharacteristic, Task> original, LevelBar instance, BeatmapLevel beatmapLevel, BeatmapDifficulty beatmapDifficulty, BeatmapCharacteristic beatmapCharacteristic)
         {
+            var barVersion = _levelBarVersions.TryGetValue(instance, out var previousVersion) ? previousVersion + 1 : 1;
+            _levelBarVersions[instance] = barVersion;
             var result = original(instance, beatmapLevel, beatmapDifficulty, beatmapCharacteristic);
 
             if (_songData == null || !_config.DisplayDiffLabels || !instance._showDifficultyAndCharacteristic)
@@ -179,12 +183,24 @@ namespace SongCore.Hooks
             }
 
             var characteristicDetails = _songData._characteristicDetails?.FirstOrDefault(d => d._beatmapCharacteristicName == beatmapCharacteristic.SerializedName());
-            if (characteristicDetails != null)
+            if (characteristicDetails?._characteristicIconFilePath is { } iconPath && !string.IsNullOrWhiteSpace(iconPath) &&
+                !_disposed && !Utils.IconWorkStopping)
             {
-                var sprite = GetCharacteristicIcon(characteristicDetails._characteristicIconFilePath);
-                if (sprite != null)
+                var level = _standardLevelDetailViewController.beatmapLevel;
+                var spritePath = Path.Combine(_customLevelLoader._loadedBeatmapSaveData[level.levelID].customLevelFolderInfo.folderPath, iconPath);
+                if (_characteristicDetailsSprites.TryGetValue(spritePath, out var sprite))
                 {
                     instance._characteristicIconImageView.sprite = sprite;
+                }
+                else
+                {
+                    var originalIcon = instance._characteristicIconImageView.sprite;
+                    _ = LoadCharacteristicIconAsync(spritePath, _iconSelectionVersion, _songData, level,
+                        () => instance is not null && instance != null &&
+                              _levelBarVersions.TryGetValue(instance, out var currentVersion) && currentVersion == barVersion &&
+                              characteristicDetails._characteristicIconFilePath == iconPath &&
+                              ReferenceEquals(instance._characteristicIconImageView.sprite, originalIcon),
+                        icon => instance._characteristicIconImageView.sprite = icon);
                 }
             }
 
@@ -258,9 +274,9 @@ namespace SongCore.Hooks
                     var originalCellIcon = cell.sprite;
                     var characteristicName = characteristicDetails._beatmapCharacteristicName;
                     _ = LoadCharacteristicIconAsync(spritePath, version, song, level,
-                        () => instance != null && cell != null &&
+                        () => instance is not null && cell is not null && instance != null && cell != null &&
                               index < instance._segmentedControl.cells.Count &&
-                              index < instance._segmentedControl._dataItems.Count &&
+                              index < instance._segmentedControl._dataItems.Length &&
                               index < instance._currentlyAvailableBeatmapCharacteristics.Count &&
                               ReferenceEquals(instance._segmentedControl.cells[index], cell) &&
                               ReferenceEquals(instance._segmentedControl._dataItems[index], dataItem) &&

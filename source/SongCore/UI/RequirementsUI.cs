@@ -2,7 +2,7 @@ using System.IO;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using IPA.Utilities;
+using UnityGame = IPA.Utilities.UnityGame;
 using IPA.Utilities.Async;
 using BeatSaberMarkupLanguage;
 using BeatSaberMarkupLanguage.Attributes;
