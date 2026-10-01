@@ -16,27 +16,27 @@ namespace SongCore.UI
         {
             if (!MissingCharIcon)
             {
-                MissingCharIcon = Utilities.Utils.LoadSpriteFromResources("SongCore.Icons.MissingChar.png")!;
+                MissingCharIcon = Utilities.Utils.LoadPreparedIcon("SongCore.Icons.MissingChar.png")!;
             }
 
             if (!LightshowIcon)
             {
-                LightshowIcon = Utilities.Utils.LoadSpriteFromResources("SongCore.Icons.Lightshow.png")!;
+                LightshowIcon = Utilities.Utils.LoadPreparedIcon("SongCore.Icons.Lightshow.png")!;
             }
 
             if (!ExtraDiffsIcon)
             {
-                ExtraDiffsIcon = Utilities.Utils.LoadSpriteFromResources("SongCore.Icons.ExtraDiffsIcon.png")!;
+                ExtraDiffsIcon = Utilities.Utils.LoadPreparedIcon("SongCore.Icons.ExtraDiffsIcon.png")!;
             }
 
             if (!WIPIcon)
             {
-                WIPIcon = Utilities.Utils.LoadSpriteFromResources("SongCore.Icons.squek.png")!;
+                WIPIcon = Utilities.Utils.LoadPreparedIcon("SongCore.Icons.squek.png")!;
             }
 
             if (!FolderIcon)
             {
-                FolderIcon = Utilities.Utils.LoadSpriteFromResources("SongCore.Icons.FolderIcon.png")!;
+                FolderIcon = Utilities.Utils.LoadPreparedIcon("SongCore.Icons.FolderIcon.png")!;
             }
         }
     }

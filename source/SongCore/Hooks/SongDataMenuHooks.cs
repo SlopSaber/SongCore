@@ -25,6 +25,9 @@ namespace SongCore.Hooks
         private readonly PluginConfig _config;
         private readonly Dictionary<string, Dictionary<BeatmapDifficulty, string>> _characteristicDifficultyLabels = new();
         private readonly Dictionary<string, Sprite> _characteristicDetailsSprites = new();
+        private readonly Dictionary<string, Task<Dictionary<string, byte[]?>>> _iconReads = new();
+        private long _iconSelectionVersion;
+        private bool _disposed;
 
         private Hook _getSongDataHook = null!;
         private Hook _textSizeLimitHook = null!;
@@ -62,6 +65,9 @@ namespace SongCore.Hooks
 
         public void Dispose()
         {
+            _disposed = true;
+            _iconSelectionVersion++;
+            _iconReads.Clear();
             _getSongDataHook.Dispose();
             _textSizeLimitHook.Dispose();
             _customDifficultyLabelsHook.Dispose();
@@ -81,6 +87,8 @@ namespace SongCore.Hooks
 
         private void HandleDidSelectLevel(Action<LevelCollectionViewController, LevelCollectionTableView, BeatmapLevel> original, LevelCollectionViewController instance, LevelCollectionTableView tableView, BeatmapLevel level)
         {
+            _iconSelectionVersion++;
+            _requirementsUI.InvalidateIconRequests();
             _songData = Collections.GetCustomLevelSongData(level.levelID);
 
             if (_songData == null)
@@ -232,32 +240,66 @@ namespace SongCore.Hooks
                     cell.hintText = characteristicDetails._characteristicLabel;
                 }
 
-                var icon = GetCharacteristicIcon(characteristicDetails._characteristicIconFilePath);
-                if (icon != null)
+                var iconPath = characteristicDetails._characteristicIconFilePath;
+                if (string.IsNullOrWhiteSpace(iconPath) || _disposed || Utils.IconWorkStopping)
+                    continue;
+                var level = _standardLevelDetailViewController.beatmapLevel;
+                var spritePath = Path.Combine(_customLevelLoader._loadedBeatmapSaveData[level.levelID].customLevelFolderInfo.folderPath, iconPath);
+                if (_characteristicDetailsSprites.TryGetValue(spritePath, out var icon))
                 {
                     dataItem.icon = icon;
                     cell.sprite = icon;
                 }
+                else
+                {
+                    var song = _songData;
+                    var version = _iconSelectionVersion;
+                    var originalIcon = dataItem.icon;
+                    var originalCellIcon = cell.sprite;
+                    var characteristicName = characteristicDetails._beatmapCharacteristicName;
+                    _ = LoadCharacteristicIconAsync(spritePath, version, song, level,
+                        () => instance != null && cell != null &&
+                              index < instance._segmentedControl.cells.Count &&
+                              index < instance._segmentedControl._dataItems.Count &&
+                              index < instance._currentlyAvailableBeatmapCharacteristics.Count &&
+                              ReferenceEquals(instance._segmentedControl.cells[index], cell) &&
+                              ReferenceEquals(instance._segmentedControl._dataItems[index], dataItem) &&
+                              instance._currentlyAvailableBeatmapCharacteristics[index].SerializedName() == characteristicName &&
+                              characteristicDetails._characteristicIconFilePath == iconPath &&
+                              ReferenceEquals(dataItem.icon, originalIcon) && ReferenceEquals(cell.sprite, originalCellIcon),
+                        sprite => { dataItem.icon = sprite; cell.sprite = sprite; });
+                }
             }
         }
 
-        private Sprite? GetCharacteristicIcon(string? characteristicIconFilePath)
+        private async Task LoadCharacteristicIconAsync(string spritePath, long version, SongData song, BeatmapLevel level,
+            Func<bool> canApply, Action<Sprite> apply)
         {
-            if (string.IsNullOrWhiteSpace(characteristicIconFilePath))
+            try
             {
-                return null;
-            }
-
-            var spritePath = Path.Combine(_customLevelLoader._loadedBeatmapSaveData[_standardLevelDetailViewController.beatmapLevel.levelID].customLevelFolderInfo.folderPath, characteristicIconFilePath);
-            if (!_characteristicDetailsSprites.TryGetValue(spritePath, out var icon))
-            {
-                if ((icon = Utils.LoadSpriteFromFile(spritePath)) != null)
+                if (!_iconReads.TryGetValue(spritePath, out var read))
+                    _iconReads[spritePath] = read = Utils.ReadIconFilesAsync(new[] { spritePath });
+                var files = await read;
+                await IPA.Utilities.UnityGame.SwitchToMainThreadAsync();
+                if (_iconReads.TryGetValue(spritePath, out var current) && ReferenceEquals(current, read))
+                    _iconReads.Remove(spritePath);
+                if (_disposed || Utils.IconWorkStopping || version != _iconSelectionVersion ||
+                    !ReferenceEquals(_songData, song) || !ReferenceEquals(_standardLevelDetailViewController.beatmapLevel, level) || !canApply())
+                    return;
+                if (!_characteristicDetailsSprites.TryGetValue(spritePath, out var icon) && files[spritePath] is { } bytes)
                 {
-                    _characteristicDetailsSprites.Add(spritePath, icon);
+                    icon = Utils.LoadSpriteRaw(bytes);
+                    if (icon != null)
+                        _characteristicDetailsSprites.Add(spritePath, icon);
                 }
+                if (icon != null && version == _iconSelectionVersion && canApply())
+                    apply(icon);
             }
-
-            return icon;
+            catch (Exception ex)
+            {
+                Plugin.Log.Error($"Error loading characteristic icon: {spritePath}");
+                Plugin.Log.Error(ex);
+            }
         }
 
         private void ProcessBeatmapRequirements(Action<StandardLevelDetailView> original, StandardLevelDetailView instance)
@@ -348,6 +390,10 @@ namespace SongCore.Hooks
                 _requirementsUI.ButtonInteractable = true;
             }
 
+            if (!ReferenceEquals(_requirementsUI.beatmapLevel, beatmapLevel) ||
+                !ReferenceEquals(_requirementsUI.songData, _songData) ||
+                _requirementsUI.beatmapKey is not { } previousKey || !previousKey.Equals(beatmapKey))
+                _requirementsUI.InvalidateIconRequests();
             _requirementsUI.beatmapLevel = beatmapLevel;
             _requirementsUI.beatmapKey = beatmapKey;
             _requirementsUI.songData = _songData;

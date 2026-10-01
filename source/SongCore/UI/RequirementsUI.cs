@@ -1,4 +1,9 @@
 using System.IO;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using IPA.Utilities;
+using IPA.Utilities.Async;
 using BeatSaberMarkupLanguage;
 using BeatSaberMarkupLanguage.Attributes;
 using BeatSaberMarkupLanguage.Components;
@@ -14,7 +19,7 @@ using Zenject;
 
 namespace SongCore.UI
 {
-    public class RequirementsUI : NotifiableBase, IInitializable
+    public class RequirementsUI : NotifiableBase, IInitializable, IDisposable
     {
         private readonly StandardLevelDetailViewController _standardLevelDetailViewController;
         private readonly CustomLevelLoader _customLevelLoader;
@@ -23,6 +28,16 @@ namespace SongCore.UI
         private readonly BSMLParser _bsmlParser;
         private readonly PluginConfig _config;
         private readonly ColorsUI _colorsUI;
+        private bool _disposed;
+        private long _iconRequestVersion;
+
+        internal void InvalidateIconRequests() => _iconRequestVersion++;
+
+        public void Dispose()
+        {
+            _disposed = true;
+            InvalidateIconRequests();
+        }
 
         private RequirementsUI(StandardLevelDetailViewController standardLevelDetailViewController, CustomLevelLoader customLevelLoader, EnvironmentsListModel environmentsListModel, TimeTweeningManager tweeningManager, BSMLParser bsmlParser, PluginConfig config, ColorsUI colorsUI)
         {
@@ -139,60 +154,64 @@ namespace SongCore.UI
         {
             if (!MissingReqIcon)
             {
-                MissingReqIcon = Utils.LoadSpriteFromResources("SongCore.Icons.RedX.png")!;
+                MissingReqIcon = Utils.LoadPreparedIcon("SongCore.Icons.RedX.png")!;
             }
 
             if (!HaveReqIcon)
             {
-                HaveReqIcon = Utils.LoadSpriteFromResources("SongCore.Icons.GreenCheck.png")!;
+                HaveReqIcon = Utils.LoadPreparedIcon("SongCore.Icons.GreenCheck.png")!;
             }
 
             if (!HaveSuggestionIcon)
             {
-                HaveSuggestionIcon = Utils.LoadSpriteFromResources("SongCore.Icons.YellowCheck.png")!;
+                HaveSuggestionIcon = Utils.LoadPreparedIcon("SongCore.Icons.YellowCheck.png")!;
             }
 
             if (!MissingSuggestionIcon)
             {
-                MissingSuggestionIcon = Utils.LoadSpriteFromResources("SongCore.Icons.YellowX.png")!;
+                MissingSuggestionIcon = Utils.LoadPreparedIcon("SongCore.Icons.YellowX.png")!;
             }
 
             if (!WarningIcon)
             {
-                WarningIcon = Utils.LoadSpriteFromResources("SongCore.Icons.Warning.png")!;
+                WarningIcon = Utils.LoadPreparedIcon("SongCore.Icons.Warning.png")!;
             }
 
             if (!InfoIcon)
             {
-                InfoIcon = Utils.LoadSpriteFromResources("SongCore.Icons.Info.png")!;
+                InfoIcon = Utils.LoadPreparedIcon("SongCore.Icons.Info.png")!;
             }
 
             if (!ColorsIcon)
             {
-                ColorsIcon = Utils.LoadSpriteFromResources("SongCore.Icons.Colors.png")!;
+                ColorsIcon = Utils.LoadPreparedIcon("SongCore.Icons.Colors.png")!;
             }
 
             if (!EnvironmentIcon)
             {
-                EnvironmentIcon = Utils.LoadSpriteFromResources("SongCore.Icons.Environment.png")!;
+                EnvironmentIcon = Utils.LoadPreparedIcon("SongCore.Icons.Environment.png")!;
             }
 
             if (!OneSaberIcon)
             {
-                OneSaberIcon = Utils.LoadSpriteFromResources("SongCore.Icons.OneSaber.png")!;
+                OneSaberIcon = Utils.LoadPreparedIcon("SongCore.Icons.OneSaber.png")!;
             }
 
             if (!StandardIcon)
             {
-                StandardIcon = Utils.LoadSpriteFromResources("SongCore.Icons.Standard.png")!;
+                StandardIcon = Utils.LoadPreparedIcon("SongCore.Icons.Standard.png")!;
             }
         }
 
         [UIAction("button-click")]
         internal void ShowRequirements()
         {
-            if (songData == null || beatmapLevel == null || beatmapKey is not { } selectedKey)
+            if (_disposed || Utils.IconWorkStopping || songData == null || beatmapLevel == null || beatmapKey is not { } selectedKey)
                 return;
+            var iconVersion = ++_iconRequestVersion;
+            var selectedSong = songData;
+            var selectedLevel = beatmapLevel;
+            var iconRequests = new List<(SongData.Contributor author, string path, string iconPath, CustomCellInfo cell)>();
 
             if (modalValue == null)
             {
@@ -226,8 +245,10 @@ namespace SongCore.UI
                     {
                         if (!string.IsNullOrWhiteSpace(author._iconPath))
                         {
-                            author.icon = Utils.LoadSpriteFromFile(Path.Combine(_customLevelLoader._loadedBeatmapSaveData[beatmapLevel.levelID].customLevelFolderInfo.folderPath, author._iconPath));
-                            ListData.Data.Add(new CustomCellInfo(author._name, author._role, author.icon != null ? author.icon : InfoIcon));
+                            var path = Path.Combine(_customLevelLoader._loadedBeatmapSaveData[beatmapLevel.levelID].customLevelFolderInfo.folderPath, author._iconPath);
+                            var cell = new CustomCellInfo(author._name, author._role, InfoIcon);
+                            ListData.Data.Add(cell);
+                            iconRequests.Add((author, path, author._iconPath, cell));
                         }
                         else
                         {
@@ -313,6 +334,47 @@ namespace SongCore.UI
 
             ListData.TableView.ReloadData();
             ListData.TableView.ScrollToCellWithIdx(0, TableView.ScrollPositionType.Beginning, false);
+            if (iconRequests.Count > 0)
+                _ = LoadContributorIconsAsync(iconRequests.ToArray(), iconVersion, selectedSong, selectedLevel);
+        }
+
+        private async Task LoadContributorIconsAsync(
+            (SongData.Contributor author, string path, string iconPath, CustomCellInfo cell)[] requests,
+            long version, SongData selectedSong, BeatmapLevel selectedLevel)
+        {
+            try
+            {
+                var paths = requests.Select(request => request.path).ToArray();
+                var files = await Utils.ReadIconFilesAsync(paths);
+                await UnityGame.SwitchToMainThreadAsync();
+                if (_disposed || Utils.IconWorkStopping || version != _iconRequestVersion ||
+                    !ReferenceEquals(songData, selectedSong) || !ReferenceEquals(beatmapLevel, selectedLevel) ||
+                    modalValue == null || !modalValue.gameObject.activeInHierarchy || customListTableData == null)
+                    return;
+                var changed = false;
+                foreach (var request in requests)
+                {
+                    if (request.author._iconPath != request.iconPath || !selectedSong.contributors.Contains(request.author) ||
+                        !ListData.Data.Contains(request.cell) ||
+                        !_customLevelLoader._loadedBeatmapSaveData.TryGetValue(selectedLevel.levelID, out var savedData) ||
+                        Path.Combine(savedData.customLevelFolderInfo.folderPath, request.iconPath) != request.path)
+                        continue;
+                    if (request.author.icon == null && files[request.path] is { } bytes)
+                        request.author.icon = Utils.LoadSpriteRaw(bytes);
+                    if (request.author.icon != null)
+                    {
+                        request.cell.Icon = request.author.icon;
+                        changed = true;
+                    }
+                }
+                if (changed)
+                    ListData.TableView.ReloadData();
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error("Error loading contributor icons:");
+                Plugin.Log.Error(ex);
+            }
         }
 
         [UIAction("list-select")]
@@ -324,10 +386,12 @@ namespace SongCore.UI
                 var iconSelected = ListData.Data[index].Icon;
                 if (iconSelected == ColorsIcon)
                 {
+                    InvalidateIconRequests();
                     modal.Hide(false, () => _colorsUI.ShowColors(diffData));
                 }
                 else if (iconSelected == StandardIcon || iconSelected == OneSaberIcon)
                 {
+                    InvalidateIconRequests();
                     _config.DisableOneSaberOverride = !_config.DisableOneSaberOverride;
                     modal.Hide(true);
                 }

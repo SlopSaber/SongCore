@@ -31,6 +31,7 @@ namespace SongCore
 
             Log = logger;
             _metadata = metadata;
+            Utilities.Utils.PrepareIconResources(metadata.Assembly);
 
             zenjector.UseLogger(logger);
             zenjector.Install<AppInstaller>(Location.App, Config.GetConfigFor(nameof(SongCore) + Path.DirectorySeparatorChar + nameof(SongCore)).Generated<PluginConfig>());
@@ -85,6 +86,7 @@ namespace SongCore
         public void OnApplicationExit()
         {
             _folderStopping = true;
+            Utilities.Utils.StopIconWork();
             Loader.StopCatalog();
             Collections.StopCachedSongDataLoad();
         }

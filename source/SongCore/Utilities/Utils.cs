@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using SongCore.Data;
 using UnityEngine;
 
@@ -9,6 +11,66 @@ namespace SongCore.Utilities
 {
     public static class Utils
     {
+        private static Task<Dictionary<string, Task<byte[]>>>? _iconResources;
+        internal static bool IconWorkStopping { get; private set; }
+
+        internal static void StopIconWork() => IconWorkStopping = true;
+
+        internal static Task<Dictionary<string, byte[]?>> ReadIconFilesAsync(string[] paths)
+        {
+            return Task.Run(() =>
+            {
+                var files = new Dictionary<string, byte[]?>();
+                foreach (var path in paths.Distinct(StringComparer.Ordinal))
+                {
+                    try
+                    {
+                        files[path] = File.Exists(path) ? File.ReadAllBytes(path) : null;
+                    }
+                    catch (Exception ex)
+                    {
+                        files[path] = null;
+                        Plugin.Log.Error($"Error reading icon: {path}");
+                        Plugin.Log.Error(ex);
+                    }
+                }
+                return files;
+            });
+        }
+
+        internal static void PrepareIconResources(Assembly assembly)
+        {
+            _iconResources ??= Task.Run(() =>
+            {
+                var resources = new Dictionary<string, Task<byte[]>>();
+                foreach (var name in assembly.GetManifestResourceNames().Where(name =>
+                             name.StartsWith("SongCore.Icons.", StringComparison.Ordinal) && name.EndsWith(".png", StringComparison.Ordinal)))
+                {
+                    try
+                    {
+                        resources.Add(name, Task.FromResult(GetResource(assembly, name)));
+                    }
+                    catch (Exception ex)
+                    {
+                        resources.Add(name, Task.FromException<byte[]>(ex));
+                    }
+                }
+                return resources;
+            });
+        }
+
+        internal static Sprite? LoadPreparedIcon(string resourcePath)
+        {
+            var assembly = typeof(Plugin).Assembly;
+            PrepareIconResources(assembly);
+            // Immediate callers may join only byte work; the resource task never dispatches to main.
+            var resources = _iconResources!.GetAwaiter().GetResult();
+            var bytes = resources.TryGetValue(resourcePath, out var resource)
+                ? resource.GetAwaiter().GetResult()
+                : Task.Run(() => GetResource(assembly, resourcePath)).GetAwaiter().GetResult();
+            return LoadSpriteRaw(bytes);
+        }
+
         public static bool IsModInstalled(string modName)
         {
             return IPA.Loader.PluginManager.EnabledPlugins.Any(mod => mod.Id == modName || mod.Name == modName);
