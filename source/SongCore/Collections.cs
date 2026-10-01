@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using BGLib.JsonExtension;
 using Newtonsoft.Json;
 using IPA.Utilities;
+using IPA.Utilities.Async;
 using SongCore.Data;
 using UnityEngine;
 
@@ -17,6 +18,8 @@ namespace SongCore
     {
         private static readonly List<string> _capabilities = new List<string>();
         private static readonly List<BeatmapCharacteristicSO> _customCharacteristics = new List<BeatmapCharacteristicSO>();
+        private static Task? _cachedSongDataLoad;
+        private static bool _stopping;
 
         internal static readonly string DataPath = Path.Combine(UnityGame.UserDataPath, nameof(SongCore), "SongCoreExtraData.dat");
         internal static readonly ConcurrentDictionary<string, string> LevelHashDictionary = new ConcurrentDictionary<string, string>();
@@ -51,11 +54,12 @@ namespace SongCore
 
         internal static void CreateCustomLevelSongData(string levelID, CustomLevelLoader.LoadedSaveData loadedSaveData)
         {
+            if (CustomSongsData.ContainsKey(levelID))
+                return;
+
             var extraSongData = new SongData();
-            if (CustomSongsData.TryAdd(levelID, extraSongData))
-            {
-                extraSongData.PopulateFromLoadedSaveData(loadedSaveData);
-            }
+            extraSongData.PopulateFromLoadedSaveData(loadedSaveData);
+            CustomSongsData.TryAdd(levelID, extraSongData);
         }
 
         public static SongData.DifficultyData? GetCustomLevelSongDifficultyData(BeatmapKey beatmapKey)
@@ -79,8 +83,22 @@ namespace SongCore
             return diffData;
         }
 
-        internal static async Task LoadCachedSongDataAsync()
+        internal static Task LoadCachedSongDataAsync()
         {
+            // Startup and refresh must await the same publication before adding map metadata.
+            return _cachedSongDataLoad ??= LoadCachedSongDataCoreAsync();
+        }
+
+        internal static void StopCachedSongDataLoad()
+        {
+            _stopping = true;
+        }
+
+        private static async Task LoadCachedSongDataCoreAsync()
+        {
+            if (_stopping)
+                return;
+
             var path = DataPath;
             try
             {
@@ -95,7 +113,8 @@ namespace SongCore
                     serializer.CheckAdditionalContent = true;
                     return (exists: true, data: serializer.Deserialize<ConcurrentDictionary<string, SongData>>(json));
                 });
-                if (!loaded.exists)
+                await UnityGame.SwitchToMainThreadAsync();
+                if (_stopping || !loaded.exists)
                     return;
                 var songData = loaded.data;
                 if (songData != null)

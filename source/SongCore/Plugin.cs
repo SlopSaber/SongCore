@@ -58,7 +58,7 @@ namespace SongCore
         [OnExit]
         public void OnApplicationExit()
         {
-            // Suppress BSIPA warning about missing [OnExit] annotated method
+            Collections.StopCachedSongDataLoad();
         }
     }
 }

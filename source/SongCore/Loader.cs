@@ -46,6 +46,7 @@ namespace SongCore
 
         private Task? _loadingTask;
         private CancellationTokenSource _loadingTaskCancellationTokenSource = new();
+        private bool _disposed;
 
         private Loader(GameScenesManager gameScenesManager, LevelFilteringNavigationController levelFilteringNavigationController, LevelPackDetailViewController levelPackDetailViewController, BeatmapLevelsModel beatmapLevelsModel, CustomLevelLoader customLevelLoader, SpriteAsyncLoader spriteAsyncLoader, BeatmapCharacteristicCollection beatmapCharacteristicCollection, ProgressBar progressBar, PluginConfig config, SettingsController settingsController, BSMLSettings bsmlSettings)
 
@@ -122,11 +123,17 @@ namespace SongCore
 
         public void Dispose()
         {
+            _disposed = true;
+            _loadingTaskCancellationTokenSource.Cancel();
+            if (ReferenceEquals(Instance, this))
+                AreSongsLoading = false;
+
             _bsmlSettings.RemoveSettingsMenu(_settingsController);
 
             SceneManager.activeSceneChanged -= HandleActiveSceneChanged;
 
             _gameScenesManager.transitionDidStartEvent -= HandleSceneTransitionDidStart;
+            _gameScenesManager.transitionDidFinishEvent -= HandleSceneTransitionDidFinish;
         }
 
         /// <summary>
@@ -148,6 +155,8 @@ namespace SongCore
         private async void HandleSceneTransitionDidFinish(GameScenesManager.SceneTransitionType sceneTransitionType, ScenesTransitionSetupData scenesTransitionSetupData, DiContainer container)
         {
             _gameScenesManager.transitionDidFinishEvent -= HandleSceneTransitionDidFinish;
+            if (_disposed)
+                return;
 
             // Ensures that the static references are still valid Unity objects.
             // They'll be destroyed on internal restart.
@@ -160,12 +169,18 @@ namespace SongCore
             if (Hashing.cachedSongHashData.IsEmpty)
             {
                 await Task.WhenAll(Hashing.LoadCachedSongHashesAsync(), Hashing.LoadCachedAudioDataAsync());
+                await UnityGame.SwitchToMainThreadAsync();
+                if (_disposed || !ReferenceEquals(Instance, this))
+                    return;
                 RefreshSongs();
             }
             else
             {
                 RefreshLevelPacks();
             }
+
+            if (_disposed || !ReferenceEquals(Instance, this))
+                return;
 
             SceneManager.activeSceneChanged += HandleActiveSceneChanged;
 
@@ -274,7 +289,7 @@ namespace SongCore
 
         public void RefreshSongs(bool fullRefresh = true)
         {
-            if (AreSongsLoading || SceneManager.GetActiveScene().name == SceneNames.kGameCoreSceneName)
+            if (_disposed || AreSongsLoading || SceneManager.GetActiveScene().name == SceneNames.kGameCoreSceneName)
             {
                 return;
             }
@@ -302,6 +317,16 @@ namespace SongCore
 
         private async void RetrieveAllSongs(bool fullRefresh)
         {
+            var cancellationToken = _loadingTaskCancellationTokenSource.Token;
+            var cacheLoad = Collections.LoadCachedSongDataAsync();
+            if (!cacheLoad.IsCompleted)
+                _loadingTask = cacheLoad;
+            await cacheLoad;
+            await UnityGame.SwitchToMainThreadAsync();
+            if (_disposed || !ReferenceEquals(Instance, this) || cancellationToken.IsCancellationRequested ||
+                cancellationToken != _loadingTaskCancellationTokenSource.Token)
+                return;
+
             var stopwatch = new Stopwatch();
 
             #region ClearAllDictionaries
